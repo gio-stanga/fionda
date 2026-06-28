@@ -1,0 +1,3 @@
+- every time you update something, report it in one of the files in .context_fionda/ if it it pertinent with the scope of that file.
+- never duplicate information across different files in /.context_fionda
+- always run tests after a code change
