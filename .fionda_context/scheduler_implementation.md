@@ -131,6 +131,63 @@ The core structural change this requires is: **weight tensor `data` pointers, wh
 
 ---
 
+## 5. Performance Protocol: Fionda Ibrido vs Partial Offload
+
+To systematically decide whether "Hybrid Fionda" (keeping a majority of layers static in VRAM and streaming the rest) is faster than `llama.cpp`'s default CPU + GPU partial offload, we define the following analytical protocol based on hardware bandwidths.
+
+### Parameters
+* **$L$**: Total number of layers in the model
+* **$S_{layer}$**: Size of a single layer's weights (e.g., in MB)
+* **$BW_{pcie}$**: Practical bandwidth of the PCIe bus (e.g., ~12 GB/s for PCIe 3.0 x16, ~24 GB/s for PCIe 4.0 x16)
+* **$BW_{ram}$**: Practical bandwidth of system RAM (e.g., ~40 GB/s for DDR4 dual-channel)
+* **$BW_{vram}$**: Bandwidth of GPU VRAM (e.g., ~448 GB/s for RTX 3060 Ti)
+* **$N_{vram}$**: Number of static layers that fit in VRAM (leaving room for KV cache)
+* **$N_{stream}$**: Number of layers to offload/stream ($L - N_{vram}$)
+
+### Base Execution Times per Layer
+For batch size 1 (autoregressive generation), execution is overwhelmingly memory-bandwidth bound:
+1. **$T_{gpu} \approx S_{layer} / BW_{vram}$** (Time to read/compute a layer directly from VRAM)
+2. **$T_{pcie} \approx S_{layer} / BW_{pcie}$** (Time to transfer a layer via PCIe)
+3. **$T_{cpu} \approx S_{layer} / BW_{ram} + T_{compute\_overhead}$** (Time for the CPU to read from RAM and perform SIMD compute)
+
+### Model 1: Standard Partial Offload (llama.cpp)
+Standard offloading runs sequentially. The GPU computes its layers, stops, and the CPU computes the rest.
+$$Time_{partial} = (N_{vram} \times T_{gpu}) + (N_{stream} \times T_{cpu})$$
+
+### Model 2: Hybrid Fionda
+Fionda groups the computation to pipeline PCIe transfers. For every layer streamed via PCIe, the GPU computes $R$ static layers from VRAM, where $R = \lfloor N_{vram} / N_{stream} \rfloor$.
+The time to compute one such group is determined by whether the PCIe transfer is perfectly hidden by the GPU compute time:
+$$Time_{group} = \max(T_{pcie}, R \times T_{gpu}) + T_{gpu}$$
+*(The final $+ T_{gpu}$ is the compute time of the newly streamed layer).*
+
+The total time per token is:
+$$Time_{fionda} = N_{stream} \times Time_{group} + (N_{vram} \bmod N_{stream}) \times T_{gpu}$$
+
+### The Decision Rule
+Hybrid Fionda is strictly better when:
+**$Time_{fionda} < Time_{partial}$**
+
+Since $T_{gpu}$ is extremely small (typically ~0.3 ms) compared to $T_{pcie}$ and $T_{cpu}$, the inequality simplifies in the worst-case (low $R$) to comparing the time to stream a layer vs computing it on CPU:
+**$T_{pcie} < T_{cpu}$**
+
+#### Scenario Examples:
+1. **PCIe 3.0 vs DDR4 (Current Hardware):**
+   DDR4 (~40 GB/s) is significantly faster than PCIe 3.0 (~12 GB/s).
+   $T_{cpu}$ is ~5 ms, while $T_{pcie}$ is ~11 ms.
+   **Verdict:** Fionda is *slower* if $N_{stream}$ is large (e.g., Q8_0 model where $N_{stream} = 25$). Fionda only wins if $N_{stream}$ is very small (e.g., Q4_K_M where $N_{stream} = 4$), because the very high $R$ ratio (44/4 = 11) allows the GPU to mask the slow PCIe transfer, and keeps the entire context execution on the GPU avoiding CPU context-switch latency.
+   
+2. **PCIe 4.0 vs DDR4:**
+   PCIe 4.0 (~24 GB/s) closes the gap. $T_{pcie}$ drops to ~5.5 ms, matching $T_{cpu}$.
+   **Verdict:** Fionda breaks even on raw time, but becomes vastly superior because keeping all compute on the GPU natively enables **Speculative Decoding**, multiplying the overall throughput.
+
+### Adaptive Placement (Dynamic Interleaving)
+To avoid severe stalls caused by rigid block scheduling (e.g., computing a huge block of static layers and then starving the GPU during consecutive dynamic layers), Fionda will use **Adaptive Placement** at load time.
+Instead of simply putting the first $N_{vram}$ layers in VRAM and streaming the rest at the end of the graph, Fionda will strategically choose *which* layers live permanently in VRAM and which are streamed based on the target gap $G = \lceil T_{pcie} / T_{gpu} \rceil$. 
+For example, if loading a layer takes the equivalent time of computing 7 layers ($G=7$), Fionda will allocate layers 0-6 in VRAM, make layer 7 dynamic, allocate 8-14 in VRAM, make layer 15 dynamic, and so on. 
+Since Transformer inference is strictly sequential, this interleaving ensures the model naturally provides exactly the required compute time (the static layers) between dynamic layers to perfectly mask the PCIe latency for the next streamed layer.
+
+---
+
 ## Implementation Plan
 
 The plan is structured in phases. Each phase builds on the previous and can be tested independently before proceeding. All changes are confined to the Fionda fork — nothing is sent upstream.
