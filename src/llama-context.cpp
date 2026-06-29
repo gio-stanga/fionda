@@ -9,6 +9,10 @@
 #include "llama-model.h"
 #include "llama-ext.h"
 
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
+
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -409,6 +413,23 @@ void llama_context::sched_reserve() {
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
 
+#ifdef GGML_USE_CUDA
+    {
+        void * fionda_slots[2];
+        void * fionda_stream;
+        void * fionda_events[2];
+        if (model.get_fionda_state(fionda_slots, &fionda_stream, fionda_events)) {
+            ggml_backend_sched_set_fionda(sched.get(), true,
+                fionda_slots[0], fionda_slots[1],
+                fionda_stream,
+                fionda_events[0], fionda_events[1],
+                ggml_backend_cuda_fionda_memcpy_async,
+                ggml_backend_cuda_fionda_event_record,
+                ggml_backend_cuda_fionda_compute_wait_event);
+        }
+    }
+#endif
+
     llama_memory_context_ptr mctx;
     if (memory) {
         LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
@@ -562,6 +583,22 @@ void llama_context::sched_reserve() {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+#ifdef GGML_USE_CUDA
+                {
+                    void * fionda_slots[2];
+                    void * fionda_stream;
+                    void * fionda_events[2];
+                    if (model.get_fionda_state(fionda_slots, &fionda_stream, fionda_events)) {
+                        ggml_backend_sched_set_fionda(sched.get(), true,
+                            fionda_slots[0], fionda_slots[1],
+                            fionda_stream,
+                            fionda_events[0], fionda_events[1],
+                            ggml_backend_cuda_fionda_memcpy_async,
+                            ggml_backend_cuda_fionda_event_record,
+                            ggml_backend_cuda_fionda_compute_wait_event);
+                    }
+                }
+#endif
                 gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             }
             if (!gf) {

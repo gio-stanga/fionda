@@ -5365,4 +5365,17 @@ void ggml_backend_cuda_fionda_event_destroy(void * event) {
     }
 }
 
+void ggml_backend_cuda_fionda_memcpy_async(void * dst, const void * src, size_t size, void * stream) {
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, reinterpret_cast<cudaStream_t>(stream)));
+}
+
+void ggml_backend_cuda_fionda_event_record(void * event, void * stream) {
+    CUDA_CHECK(cudaEventRecord(reinterpret_cast<cudaEvent_t>(event), reinterpret_cast<cudaStream_t>(stream)));
+}
+
+void ggml_backend_cuda_fionda_compute_wait_event(ggml_backend_t backend, void * event) {
+    ggml_backend_cuda_context * ctx = (ggml_backend_cuda_context *)backend->context;
+    CUDA_CHECK(cudaStreamWaitEvent(ctx->stream(), reinterpret_cast<cudaEvent_t>(event), 0));
+}
+
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)

@@ -736,6 +736,17 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
+
+    // fionda VRAM double buffering state
+    bool fionda_enabled;
+    void * fionda_slots[2];
+    void * fionda_stream;
+    void * fionda_events[2];
+    int fionda_cur_slot;
+    bool fionda_dma_in_flight;
+    ggml_fionda_memcpy_async_t fionda_memcpy_cb;
+    ggml_fionda_event_record_t fionda_event_record_cb;
+    ggml_fionda_compute_wait_event_t fionda_compute_wait_cb;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1450,16 +1461,67 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
+    // fionda DMA look-ahead
+    auto fionda_start_dma = [&](int start_split_id) {
+        if (!sched->fionda_enabled) return false;
+        if (sched->fionda_dma_in_flight) return true;
+
+        for (int split_id = start_split_id; split_id < sched->n_splits; split_id++) {
+            struct ggml_backend_sched_split * split = &splits[split_id];
+            
+            size_t current_offset = 0;
+            bool found_fionda = false;
+            
+            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+                struct ggml_tensor * input = split->inputs[input_id];
+                ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, input);
+
+                if (input->buffer && input->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                    ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    
+                    found_fionda = true;
+                    struct ggml_tensor * input_cpy = tensor_copy(input, split->backend_id, sched->cur_copy);
+                    
+                    int slot = sched->fionda_cur_slot;
+                    input_cpy->data = (char*)sched->fionda_slots[slot] + current_offset;
+                    
+                    size_t size = ggml_nbytes(input);
+                    sched->fionda_memcpy_cb(input_cpy->data, input->data, size, sched->fionda_stream);
+                    
+                    // align offset to 256 bytes
+                    current_offset += (size + 255) & ~255;
+                }
+            }
+            if (found_fionda) {
+                int slot = sched->fionda_cur_slot;
+                sched->fionda_event_record_cb(sched->fionda_events[slot], sched->fionda_stream);
+                sched->fionda_dma_in_flight = true;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    fionda_start_dma(0);
+
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        bool fionda_synced_this_split = false;
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
             struct ggml_tensor * input = split->inputs[input_id];
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+
+            bool is_fionda_weight = false;
+            if (sched->fionda_enabled && input->buffer && input->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                is_fionda_weight = true;
+            }
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
@@ -1469,6 +1531,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     ggml_backend_synchronize(split_backend);
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
+            } else if (is_fionda_weight) {
+                if (!fionda_synced_this_split) {
+                    sched->fionda_compute_wait_cb(split_backend, sched->fionda_events[sched->fionda_cur_slot]);
+                    sched->fionda_cur_slot = 1 - sched->fionda_cur_slot;
+                    sched->fionda_dma_in_flight = false;
+                    fionda_start_dma(split_id + 1);
+                    fionda_synced_this_split = true;
+                }
             } else {
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -1822,6 +1892,29 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     GGML_ASSERT(sched);
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
+}
+
+void ggml_backend_sched_set_fionda(
+        ggml_backend_sched_t sched,
+        bool enabled,
+        void * slot0, void * slot1,
+        void * stream,
+        void * event0, void * event1,
+        ggml_fionda_memcpy_async_t memcpy_async_cb,
+        ggml_fionda_event_record_t event_record_cb,
+        ggml_fionda_compute_wait_event_t compute_wait_event_cb) {
+    GGML_ASSERT(sched);
+    sched->fionda_enabled = enabled;
+    sched->fionda_slots[0] = slot0;
+    sched->fionda_slots[1] = slot1;
+    sched->fionda_stream = stream;
+    sched->fionda_events[0] = event0;
+    sched->fionda_events[1] = event1;
+    sched->fionda_cur_slot = 0;
+    sched->fionda_dma_in_flight = false;
+    sched->fionda_memcpy_cb = memcpy_async_cb;
+    sched->fionda_event_record_cb = event_record_cb;
+    sched->fionda_compute_wait_cb = compute_wait_event_cb;
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {

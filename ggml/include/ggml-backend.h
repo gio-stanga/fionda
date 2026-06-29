@@ -304,6 +304,22 @@ extern "C" {
 
     // Initialize a backend scheduler, backends with low index are given priority over backends with high index
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload);
+
+    // Fionda extension
+    typedef void (*ggml_fionda_memcpy_async_t)(void * dst, const void * src, size_t size, void * stream);
+    typedef void (*ggml_fionda_event_record_t)(void * event, void * stream);
+    typedef void (*ggml_fionda_compute_wait_event_t)(ggml_backend_t backend, void * event);
+
+    GGML_API void ggml_backend_sched_set_fionda(
+            ggml_backend_sched_t sched,
+            bool enabled,
+            void * slot0, void * slot1,
+            void * stream,
+            void * event0, void * event1,
+            ggml_fionda_memcpy_async_t memcpy_async_cb,
+            ggml_fionda_event_record_t event_record_cb,
+            ggml_fionda_compute_wait_event_t compute_wait_event_cb);
+
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
 
     // Initialize backend buffers from a measure graph

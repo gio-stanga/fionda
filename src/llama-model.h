@@ -567,6 +567,8 @@ struct llama_model {
     explicit llama_model(const struct llama_model_params & params);
     ~llama_model();
 
+    bool get_fionda_state(void ** slots, void ** stream, void ** events) const;
+
     void load_stats  (llama_model_loader & ml);
     void load_arch   (llama_model_loader & ml);
     void load_hparams(llama_model_loader & ml);

@@ -356,6 +356,24 @@ llama_model::~llama_model() {
     }
 }
 
+bool llama_model::get_fionda_state(void ** slots, void ** stream, void ** events) const {
+    if (!pimpl->fionda_vram.initialized) {
+        return false;
+    }
+    if (slots) {
+        slots[0] = pimpl->fionda_vram.slot[0];
+        slots[1] = pimpl->fionda_vram.slot[1];
+    }
+    if (stream) {
+        *stream = pimpl->fionda_vram.transfer_stream;
+    }
+    if (events) {
+        events[0] = pimpl->fionda_vram.slot_ready[0];
+        events[1] = pimpl->fionda_vram.slot_ready[1];
+    }
+    return true;
+}
+
 void llama_model::load_stats(llama_model_loader & ml) {
     pimpl->n_elements = ml.n_elements;
     pimpl->n_bytes = ml.n_bytes;
