@@ -5313,4 +5313,56 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
     return cuda_backend;
 }
 
+// fionda VRAM double buffer API
+
+int ggml_backend_cuda_fionda_vram_alloc(void ** out_ptr, size_t size, int device) {
+    ggml_cuda_set_device(device);
+    cudaError_t err = cudaMalloc(out_ptr, size);
+    if (err != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaMalloc %.2f MiB on device %d failed: %s\n",
+                __func__, size / 1024.0 / 1024.0, device, cudaGetErrorString(err));
+    }
+    return (int)err;
+}
+
+void ggml_backend_cuda_fionda_vram_free(void * ptr) {
+    if (ptr) {
+        CUDA_CHECK(cudaFree(ptr));
+    }
+}
+
+int ggml_backend_cuda_fionda_stream_create(void ** out_stream) {
+    cudaError_t err = cudaStreamCreateWithFlags(
+        reinterpret_cast<cudaStream_t *>(out_stream),
+        cudaStreamNonBlocking);
+    if (err != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaStreamCreateWithFlags failed: %s\n",
+                __func__, cudaGetErrorString(err));
+    }
+    return (int)err;
+}
+
+void ggml_backend_cuda_fionda_stream_destroy(void * stream) {
+    if (stream) {
+        CUDA_CHECK(cudaStreamDestroy(reinterpret_cast<cudaStream_t>(stream)));
+    }
+}
+
+int ggml_backend_cuda_fionda_event_create(void ** out_event) {
+    cudaError_t err = cudaEventCreateWithFlags(
+        reinterpret_cast<cudaEvent_t *>(out_event),
+        cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaEventCreateWithFlags failed: %s\n",
+                __func__, cudaGetErrorString(err));
+    }
+    return (int)err;
+}
+
+void ggml_backend_cuda_fionda_event_destroy(void * event) {
+    if (event) {
+        CUDA_CHECK(cudaEventDestroy(reinterpret_cast<cudaEvent_t>(event)));
+    }
+}
+
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)

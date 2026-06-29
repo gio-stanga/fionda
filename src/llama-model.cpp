@@ -5,6 +5,10 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-vocab.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -320,6 +324,17 @@ struct llama_model::impl {
     std::vector<layer_dev> dev_layer;
 
     bool has_tensor_overrides;
+
+    // fionda scheduler: VRAM double buffer
+    struct FiondaVramBuffer {
+        void *       cuda_buf         = nullptr; // raw VRAM block: 2*slot_size bytes
+        void *       slot[2]          = {};      // pointers into cuda_buf for the two slots
+        size_t       slot_size        = 0;       // size of one slot in bytes
+        void *       transfer_stream  = nullptr; // dedicated cudaStream_t for H2D DMA
+        void *       slot_ready[2]    = {};      // cudaEvent_t: slot N is fully transferred
+        int          cur_slot         = 0;       // slot currently being computed
+        bool         initialized      = false;
+    } fionda_vram;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -329,6 +344,15 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
 llama_model::~llama_model() {
     for (auto * lora : loras) {
         delete lora;
+    }
+    // fionda: release VRAM double buffer resources
+    if (pimpl->fionda_vram.initialized) {
+#ifdef GGML_USE_CUDA
+        ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[1]);
+        ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[0]);
+        ggml_backend_cuda_fionda_stream_destroy(pimpl->fionda_vram.transfer_stream);
+        ggml_backend_cuda_fionda_vram_free(pimpl->fionda_vram.cuda_buf);
+#endif
     }
 }
 
@@ -7902,6 +7926,72 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
+    }
+
+    // fionda: allocate VRAM double buffer
+    if (params.fionda_mode && !devices.empty()) {
+        // Find the CUDA device ID to use (first GPU device)
+        // devices[0] is the primary GPU in the case of single GPU setups.
+        // The GPU device index in CUDA is stored as an int inside the backend context.
+        // We use the main_gpu param to stay consistent with the rest of the loader.
+        const int cuda_device = params.main_gpu;
+
+        // Calculate the slot size: size of the largest CPU-resident (dynamic) layer.
+        // These are the layers assigned to cpu_buft_list (i.e., NOT in VRAM).
+        size_t max_layer_size = 0;
+        const int n_layer_total = hparams.n_layer;
+        const int i_gpu_start = std::max(int(hparams.n_layer) + 1 - n_gpu_layers, 0);
+        for (auto & [ctx, _bufs] : pimpl->ctxs_bufs) {
+            // We look at each tensor: if it lives in a host (CPU) buffer and
+            // belongs to a layer below i_gpu_start, it's a dynamic layer tensor.
+            for (auto * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                if (t->buffer && ggml_backend_buffer_is_host(t->buffer)) {
+                    // Round up to 128-byte CUDA alignment
+                    const size_t tsize = (ggml_nbytes(t) + 127) & ~(size_t)127;
+                    max_layer_size += tsize;
+                }
+            }
+        }
+
+        // max_layer_size now holds total CPU tensor bytes. Divide by number of CPU layers
+        // to get average, then take max as a conservative upper bound for the slot.
+        const int n_cpu_layers = std::max(1, i_gpu_start);
+        const size_t slot_size = (max_layer_size / n_cpu_layers + 127) & ~(size_t)127;
+
+        LLAMA_LOG_INFO("%s: fionda: allocating VRAM double buffer: 2 × %.2f MiB on device %d\n",
+            __func__, slot_size / 1024.0 / 1024.0, cuda_device);
+
+        void * cuda_buf = nullptr;
+        int err = 0;
+#ifdef GGML_USE_CUDA
+        err = ggml_backend_cuda_fionda_vram_alloc(&cuda_buf, 2 * slot_size, cuda_device);
+#else
+        err = -1; // Fail if not compiled with CUDA
+#endif
+        if (err != 0 || !cuda_buf) {
+            LLAMA_LOG_WARN("%s: fionda: VRAM double buffer allocation failed (err=%d), "
+                           "Fionda scheduler will be disabled\n", __func__, err);
+        } else {
+            auto & fv = pimpl->fionda_vram;
+            fv.cuda_buf    = cuda_buf;
+            fv.slot[0]     = cuda_buf;
+            fv.slot[1]     = (char *)cuda_buf + slot_size;
+            fv.slot_size   = slot_size;
+
+#ifdef GGML_USE_CUDA
+            ggml_backend_cuda_fionda_stream_create(&fv.transfer_stream);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_ready[0]);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1]);
+#endif
+
+            fv.cur_slot    = 0;
+            fv.initialized = true;
+
+            LLAMA_LOG_INFO("%s: fionda: VRAM double buffer ready (slot_size = %.2f MiB)\n",
+                __func__, slot_size / 1024.0 / 1024.0);
+        }
+
+        GGML_UNUSED(n_layer_total);
     }
 
     return true;

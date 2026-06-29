@@ -42,6 +42,14 @@ GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
+// fionda VRAM double buffer API
+GGML_BACKEND_API int  ggml_backend_cuda_fionda_vram_alloc(void ** out_ptr, size_t size, int device);
+GGML_BACKEND_API void ggml_backend_cuda_fionda_vram_free(void * ptr);
+GGML_BACKEND_API int  ggml_backend_cuda_fionda_stream_create(void ** out_stream);
+GGML_BACKEND_API void ggml_backend_cuda_fionda_stream_destroy(void * stream);
+GGML_BACKEND_API int  ggml_backend_cuda_fionda_event_create(void ** out_event);
+GGML_BACKEND_API void ggml_backend_cuda_fionda_event_destroy(void * event);
+
 #ifdef  __cplusplus
 }
 #endif
