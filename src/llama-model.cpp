@@ -2617,7 +2617,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     const int n_layer      = hparams.n_layer;
     const int n_gpu_layers = this->n_gpu_layers();
 
-    const bool use_mmap_buffer = true;
+    const bool use_mmap_buffer = !params.fionda_mode;
 
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
         __func__, ml.use_mmap ? "true" : "false", ml.use_direct_io ? "true" : "false");
@@ -8954,6 +8954,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.fionda_mode                 =*/ false,
     };
 
     return result;
