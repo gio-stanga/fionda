@@ -4,8 +4,8 @@ Questo documento descrive la strategia di gestione dei branch Git adottata per l
 
 ## Struttura dei Branch
 
-### 1. `main` (Upstream Reference)
-- **Scopo**: Mantenere il codice originale di `llama.cpp` intatto (nel tuo clone locale equivaleva al branch `0cc4m/cpu-arm-nvfp4-fix`).
+### 1. `0cc4m/cpu-arm-nvfp4-fix` (Upstream Reference)
+- **Scopo**: Mantenere il codice originale di `llama.cpp` intatto.
 - **Utilizzo**: Nessuno sviluppo attivo. Viene utilizzato solo come punto di partenza puro per avere i benchmark della *baseline* (Partial Offloading originale) e per verificare il comportamento del codice upstream originale in caso di dubbi.
 
 ### 2. `fionda-scheduler` (Base Implementation)
