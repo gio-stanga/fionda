@@ -2711,10 +2711,47 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         splits[i] /= split_sum;
     }
 
-    const int i_gpu_start = std::max(int(hparams.n_layer) + 1 - n_gpu_layers, 0);
+    // Fionda Adaptive Interleaving: when fionda_mode is active and we have a GPU,
+    // distribute dynamic (CPU) layers uniformly among static (GPU) layers using
+    // a Bresenham-like algorithm instead of the standard "all static first" block.
+    // G is implicitly floor(n_gpu / n_cpu), which approximates by defect as requested.
+    const bool fionda_interleave = params.fionda_mode && !devices.empty() && n_gpu_layers > 0
+                                   && n_gpu_layers < n_layer;
+
+    // Number of truly dynamic (CPU-resident) layers in fionda mode.
+    // In standard mode this is derived from i_gpu_start; in fionda mode
+    // it equals n_layer - clamped n_gpu.
+    const int fionda_n_gpu = fionda_interleave ? std::min(n_gpu_layers, n_layer) : 0;
+    const int fionda_n_cpu = fionda_interleave ? (n_layer - fionda_n_gpu) : 0;
+
+    // Returns true when layer `il` (0-indexed, repeating block only) should be
+    // kept in CPU RAM (dynamic). Uses integer Bresenham to spread n_cpu points
+    // uniformly across n_layer slots, always rounding G down.
+    auto fionda_is_dynamic = [&](int il) -> bool {
+        if (!fionda_interleave || fionda_n_cpu <= 0) return false;
+        // each slot captures one dynamic layer when the Bresenham counter crosses an integer boundary
+        return ((il + 1) * fionda_n_cpu / n_layer) != (il * fionda_n_cpu / n_layer);
+    };
+
+    const int i_gpu_start    = std::max(int(hparams.n_layer) + 1 - n_gpu_layers, 0);
     const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, int(n_layer) + 1);
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
         const bool is_swa = il < int(hparams.n_layer) && hparams.is_swa(il);
+
+        if (fionda_interleave) {
+            // output layer (il == n_layer): always GPU in Fionda mode
+            if (il == n_layer || !fionda_is_dynamic(il)) {
+                auto * dev = devices.at(0); // single-GPU: always devices[0]
+                LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s (fionda static), is_swa = %d\n",
+                                il, ggml_backend_dev_name(dev), is_swa);
+                return {dev, &pimpl->gpu_buft_list.at(dev)};
+            }
+            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s (fionda dynamic), is_swa = %d\n",
+                            il, ggml_backend_dev_name(cpu_dev), is_swa);
+            return {cpu_dev, &pimpl->cpu_buft_list};
+        }
+
+        // standard (non-fionda) assignment unchanged
         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
             LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
             return {cpu_dev, &pimpl->cpu_buft_list};
@@ -2724,6 +2761,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
         return {dev, &pimpl->gpu_buft_list.at(dev)};
     };
+
+    if (fionda_interleave) {
+        LLAMA_LOG_INFO("%s: fionda: adaptive interleaving — %d GPU layers, %d CPU (dynamic) layers, implicit G=%d\n",
+                __func__, fionda_n_gpu, fionda_n_cpu,
+                fionda_n_cpu > 0 ? fionda_n_gpu / fionda_n_cpu : fionda_n_gpu);
+    }
 
     // assign the input layer
     // there is very little benefit to offloading the input layer, so always keep it on the CPU
@@ -7954,27 +7997,41 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         // We use the main_gpu param to stay consistent with the rest of the loader.
         const int cuda_device = params.main_gpu;
 
-        // Calculate the slot size: size of the largest CPU-resident (dynamic) layer.
-        // These are the layers assigned to cpu_buft_list (i.e., NOT in VRAM).
-        size_t max_layer_size = 0;
-        const int n_layer_total = hparams.n_layer;
-        const int i_gpu_start = std::max(int(hparams.n_layer) + 1 - n_gpu_layers, 0);
+        // Calculate the slot size: size of the largest single dynamic layer.
+        // With Fionda interleaving, dynamic layers are spread uniformly so we
+        // cannot rely on i_gpu_start. Instead we iterate over every tensor,
+        // accumulate bytes per layer index, and take the max across dynamic layers.
+        const int   fionda_n_gpu_buf = std::min(n_gpu_layers, int(hparams.n_layer));
+        const int   fionda_n_cpu_buf = int(hparams.n_layer) - fionda_n_gpu_buf;
+        auto fionda_is_dynamic_buf = [&](int il) -> bool {
+            if (fionda_n_cpu_buf <= 0) return false;
+            return ((il + 1) * fionda_n_cpu_buf / int(hparams.n_layer)) !=
+                   (il       * fionda_n_cpu_buf / int(hparams.n_layer));
+        };
+
+        // Sum bytes per transformer layer by parsing tensor names (e.g. "blk.7.attn_q.weight").
+        // Tensors that are on a host (CPU pinned) buffer belong to dynamic layers.
+        std::vector<size_t> layer_bytes(hparams.n_layer + 1, 0);
         for (auto & [ctx, _bufs] : pimpl->ctxs_bufs) {
-            // We look at each tensor: if it lives in a host (CPU) buffer and
-            // belongs to a layer below i_gpu_start, it's a dynamic layer tensor.
             for (auto * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
-                if (t->buffer && ggml_backend_buffer_is_host(t->buffer)) {
-                    // Round up to 128-byte CUDA alignment
-                    const size_t tsize = (ggml_nbytes(t) + 127) & ~(size_t)127;
-                    max_layer_size += tsize;
+                if (!t->buffer || !ggml_backend_buffer_is_host(t->buffer)) continue;
+                // parse layer index from tensor name ("blk.<il>.<...>")
+                int il = -1;
+                if (sscanf(ggml_get_name(t), "blk.%d.", &il) == 1 &&
+                    il >= 0 && il < int(hparams.n_layer)) {
+                    layer_bytes[il] += (ggml_nbytes(t) + 255) & ~(size_t)255;
                 }
             }
         }
-
-        // max_layer_size now holds total CPU tensor bytes. Divide by number of CPU layers
-        // to get average, then take max as a conservative upper bound for the slot.
-        const int n_cpu_layers = std::max(1, i_gpu_start);
-        const size_t slot_size = (max_layer_size / n_cpu_layers + 127) & ~(size_t)127;
+        size_t slot_size = 0;
+        for (int il = 0; il < int(hparams.n_layer); ++il) {
+            if (fionda_is_dynamic_buf(il) && layer_bytes[il] > slot_size) {
+                slot_size = layer_bytes[il];
+            }
+        }
+        // safety: align to 256 bytes and ensure non-zero
+        slot_size = std::max(slot_size, (size_t)1);
+        slot_size = (slot_size + 255) & ~(size_t)255;
 
         LLAMA_LOG_INFO("%s: fionda: allocating VRAM double buffer: 2 × %.2f MiB on device %d\n",
             __func__, slot_size / 1024.0 / 1024.0, cuda_device);
@@ -8009,7 +8066,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 __func__, slot_size / 1024.0 / 1024.0);
         }
 
-        GGML_UNUSED(n_layer_total);
     }
 
     return true;
