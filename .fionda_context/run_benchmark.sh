@@ -13,6 +13,8 @@ MODELS=(
 # numero di layer fissi sulla GPU
 NGL=20
 
+
+
 echo "Inizio Benchmark Suite Fionda v1.0..."
 
 for model in "${MODELS[@]}"; do
