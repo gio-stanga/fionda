@@ -2711,6 +2711,93 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         splits[i] /= split_sum;
     }
 
+    // fionda: hardware specialization benchmark
+    float t_pcie_ms = 0.0f;
+    float t_gpu_ms = 0.0f;
+    int fionda_opt_gap = 0;
+    if (params.fionda_mode && !devices.empty() && n_gpu_layers > 0 && n_gpu_layers < n_layer) {
+        ggml_backend_dev_t gpu_dev = devices[0];
+        
+        // dynamically calculate average layer size and dimensions
+        const size_t bench_size = pimpl->n_bytes / n_layer;
+        const int bench_embd = hparams.n_embd;
+        
+        ggml_backend_buffer_t buf_cpu = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(cpu_dev), bench_size);
+        ggml_backend_buffer_t buf_gpu = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(gpu_dev), bench_size);
+        ggml_backend_t backend_gpu = ggml_backend_dev_init(gpu_dev, nullptr);
+        
+        if (buf_cpu && buf_gpu && backend_gpu) {
+            struct ggml_init_params params_bench = {
+                /* .mem_size   = */ ggml_tensor_overhead() * 16 + ggml_graph_overhead(),
+                /* .mem_buffer = */ NULL,
+                /* .no_alloc   = */ true,
+            };
+            struct ggml_context * ctx = ggml_init(params_bench);
+            
+            // 1. measure PCIe H2D transfer
+            struct ggml_tensor * t_cpu = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, bench_size);
+            struct ggml_tensor * t_gpu = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, bench_size);
+            
+            void * addr_cpu = ggml_backend_buffer_get_base(buf_cpu);
+            void * addr_gpu = ggml_backend_buffer_get_base(buf_gpu);
+            
+            ggml_backend_tensor_alloc(buf_cpu, t_cpu, addr_cpu);
+            ggml_backend_tensor_alloc(buf_gpu, t_gpu, addr_gpu);
+            
+            int64_t t0 = ggml_time_us();
+            ggml_backend_tensor_copy(t_cpu, t_gpu);
+            int64_t t1 = ggml_time_us();
+            t_pcie_ms = (t1 - t0) / 1000.0f;
+            
+            // 2. measure GPU compute dynamically
+            struct ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, bench_embd, bench_embd);
+            struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, bench_embd, 512);
+            struct ggml_tensor * c = ggml_mul_mat(ctx, a, b);
+            struct ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, c);
+            
+            size_t size_a = bench_embd * bench_embd * sizeof(float);
+            size_t size_b = bench_embd * 512 * sizeof(float);
+            size_t size_c = bench_embd * 512 * sizeof(float);
+            
+            // ensure we don't overflow the bench_size
+            if (size_a + size_b + size_c <= bench_size) {
+                void * addr_a = (char *)addr_gpu;
+                void * addr_b = (char *)addr_gpu + size_a;
+                void * addr_c = (char *)addr_gpu + size_a + size_b;
+                
+                ggml_backend_tensor_alloc(buf_gpu, a, addr_a);
+                ggml_backend_tensor_alloc(buf_gpu, b, addr_b);
+                ggml_backend_tensor_alloc(buf_gpu, c, addr_c);
+                
+                ggml_backend_graph_compute(backend_gpu, gf); // warmup
+                
+                t0 = ggml_time_us();
+                ggml_backend_graph_compute(backend_gpu, gf);
+                t1 = ggml_time_us();
+                t_gpu_ms = (t1 - t0) / 1000.0f;
+            } else {
+                LLAMA_LOG_WARN("%s: fionda: layer too small for benchmark matrices\n", __func__);
+            }
+            
+            ggml_free(ctx);
+            
+            // 3. calculate optimal gap
+            if (t_gpu_ms > 0) {
+                fionda_opt_gap = (int)std::ceil(t_pcie_ms / t_gpu_ms);
+            }
+            
+            LLAMA_LOG_INFO("%s: fionda: micro-benchmark complete. PCIe H2D = %.2f ms, GPU Compute = %.2f ms, Optimal Gap G = %d\n",
+                           __func__, t_pcie_ms, t_gpu_ms, fionda_opt_gap);
+        } else {
+            LLAMA_LOG_WARN("%s: fionda: micro-benchmark failed to allocate buffers\n", __func__);
+        }
+        
+        if (buf_cpu) ggml_backend_buffer_free(buf_cpu);
+        if (buf_gpu) ggml_backend_buffer_free(buf_gpu);
+        if (backend_gpu) ggml_backend_free(backend_gpu);
+    }
+
     // Fionda Adaptive Interleaving: when fionda_mode is active and we have a GPU,
     // distribute dynamic (CPU) layers uniformly among static (GPU) layers using
     // a Bresenham-like algorithm instead of the standard "all static first" block.
@@ -2723,6 +2810,26 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // it equals n_layer - clamped n_gpu.
     const int fionda_n_gpu = fionda_interleave ? std::min(n_gpu_layers, n_layer) : 0;
     const int fionda_n_cpu = fionda_interleave ? (n_layer - fionda_n_gpu) : 0;
+    
+    // evaluate hardware coefficient
+    if (fionda_interleave && fionda_n_cpu > 0 && fionda_opt_gap > 0) {
+        int natural_gap = fionda_n_gpu / fionda_n_cpu;
+        LLAMA_LOG_INFO("%s: fionda: Hardware Coefficient Analysis -> Available Gap = %d, Required Gap = %d\n",
+                       __func__, natural_gap, fionda_opt_gap);
+                       
+        if (natural_gap < fionda_opt_gap) {
+            LLAMA_LOG_WARN("=================================================================================\n");
+            LLAMA_LOG_WARN("[FIONDA WARNING] HARDWARE BOTTLENECK DETECTED!\n");
+            LLAMA_LOG_WARN("Your PCIe transfer speed is too slow to be completely hidden by the GPU compute.\n");
+            LLAMA_LOG_WARN("- Required GPU layers per CPU layer to hide DMA : %d\n", fionda_opt_gap);
+            LLAMA_LOG_WARN("- Available GPU layers per CPU layer in VRAM    : %d\n", natural_gap);
+            LLAMA_LOG_WARN("Fionda will still run and be faster than Vanilla, but you will experience PCIe stutters.\n");
+            LLAMA_LOG_WARN("To achieve 100%% overlap, consider lowering the model quantization or upgrading your GPU.\n");
+            LLAMA_LOG_WARN("=================================================================================\n");
+        } else {
+            LLAMA_LOG_INFO("%s: fionda: System is perfectly balanced. 100%% PCIe DMA overlap guaranteed!\n", __func__);
+        }
+    }
 
     // Returns true when layer `il` (0-indexed, repeating block only) should be
     // kept in CPU RAM (dynamic). Uses integer Bresenham to spread n_cpu points
