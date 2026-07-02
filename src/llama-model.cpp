@@ -2793,9 +2793,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             LLAMA_LOG_WARN("%s: fionda: micro-benchmark failed to allocate buffers\n", __func__);
         }
         
-        if (buf_cpu) ggml_backend_buffer_free(buf_cpu);
-        if (buf_gpu) ggml_backend_buffer_free(buf_gpu);
+        if (backend_gpu) ggml_backend_synchronize(backend_gpu);
         if (backend_gpu) ggml_backend_free(backend_gpu);
+        if (buf_gpu)     ggml_backend_buffer_free(buf_gpu);
+        if (buf_cpu)     ggml_backend_buffer_free(buf_cpu);
     }
 
     // Fionda Adaptive Interleaving: when fionda_mode is active and we have a GPU,
@@ -8480,6 +8481,7 @@ static ggml_backend_buffer_type_t select_buft(const buft_list_t & buft_list, con
 
     throw std::runtime_error(format("no suitable buffer type found"));
 }
+
 
 ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
     return ::select_buft(
