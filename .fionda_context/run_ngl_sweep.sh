@@ -34,13 +34,14 @@ for model in "${MODELS[@]}"; do
     echo "=========================================================="
 
     for ngl in "${NGL_VALUES[@]}"; do
+        ngl_fionda=$((ngl - 2))
         echo ""
         echo "[NGL = $ngl]"
         echo "----------------------------------------------------------"
         echo ">> VANILLA:"
         ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS
         echo ">> FIONDA:"
-        ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS --fionda
+        ../build/bin/llama-bench -m "$model" -ngl $ngl_fionda -p $PP_TOKENS -n $TG_TOKENS --fionda
         echo "----------------------------------------------------------"
     done
 done
