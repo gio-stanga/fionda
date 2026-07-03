@@ -202,6 +202,10 @@ struct llm_build_dream : public llm_graph_context {
     llm_build_dream(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_eagle : public llm_graph_context {
+    llm_build_eagle(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_ernie4_5 : public llm_graph_context {
     llm_build_ernie4_5(const llama_model & model, const llm_graph_params & params);
 };
