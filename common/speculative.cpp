@@ -10,6 +10,7 @@
 #include "sampling.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -20,6 +21,7 @@
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
+    COMMON_SPECULATIVE_TYPE_EAGLE1,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
@@ -31,6 +33,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
 const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
+    {"eagle1",        COMMON_SPECULATIVE_TYPE_EAGLE1},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
@@ -462,6 +465,223 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
     }
 };
 
+// EAGLE1: the draft model is a single llama-style layer that predicts the next token from
+// the target model's hidden states (see .fionda_context/eagle.md).
+//
+// draft-KV position j holds the pair (token = seq[j+1], feature = f_j), where
+// seq = prompt_tgt + [id_last] and f_j is the target's post-final-norm hidden state at
+// position j (read via llama_get_embeddings_ith - both contexts run with embeddings
+// enabled). the logits at pair j predict seq[j+2]. during the autoregressive draft loop
+// the feature is the draft's own raw layer output instead.
+struct common_speculative_state_eagle1 : public common_speculative_state {
+    llama_context * ctx_tgt;
+    llama_context * ctx_dft;
+
+    llama_batch batch;
+
+    const int32_t n_embd;
+    const int32_t n_vocab;
+
+    llama_tokens tokens_pair;      // token of each pair currently in the draft KV
+    int32_t      n_verified   = 0; // number of pairs computed with true target features
+    llama_pos    pos_base_tgt = 0; // target position of row 0 of the last target decode
+
+    std::vector<float> feats;      // staging buffer for features fed to the draft
+
+    common_speculative_state_eagle1(
+            enum common_speculative_type type,
+            llama_context * ctx_tgt,
+            llama_context * ctx_dft)
+        : common_speculative_state(type)
+        , ctx_tgt(ctx_tgt)
+        , ctx_dft(ctx_dft)
+        , n_embd (llama_model_n_embd    (llama_get_model(ctx_dft)))
+        , n_vocab(llama_vocab_n_tokens  (llama_model_get_vocab(llama_get_model(ctx_dft))))
+    {
+        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+    }
+
+    ~common_speculative_state_eagle1() override {
+        llama_perf_context_print(ctx_dft);
+
+        llama_free(ctx_dft);
+
+        llama_batch_free(batch);
+    }
+
+    // token of pair j for the current seq = prompt_tgt + [id_last]
+    static llama_token pair_token(const llama_tokens & prompt_tgt, llama_token id_last, int32_t j) {
+        return j + 1 < (int32_t) prompt_tgt.size() ? prompt_tgt[j + 1] : id_last;
+    }
+
+    void begin(const llama_tokens & prompt) override {
+        llama_memory_clear(llama_get_memory(ctx_dft), true);
+
+        tokens_pair.clear();
+        n_verified   = 0;
+        pos_base_tgt = 0;
+
+        const int32_t n1 = (int32_t) prompt.size();
+        if (n1 < 2) {
+            return;
+        }
+
+        // the target's prompt decode produced hidden states for all positions 0..n1-1
+        // (embeddings mode outputs every token). feed pairs 0..n1-2 through the draft layer.
+        feats.resize((size_t) (n1 - 1)*n_embd);
+        for (int32_t j = 0; j < n1 - 1; ++j) {
+            const float * f = llama_get_embeddings_ith(ctx_tgt, j);
+            GGML_ASSERT(f != nullptr && "target context must run with embeddings enabled for eagle1");
+            memcpy(feats.data() + (size_t) j*n_embd, f, n_embd*sizeof(float));
+        }
+
+        const int32_t n_batch = llama_n_batch(ctx_dft);
+
+        for (int32_t j0 = 0; j0 < n1 - 1; j0 += n_batch) {
+            const int32_t n_chunk = std::min(n_batch, n1 - 1 - j0);
+
+            llama_set_eagle_hidden(ctx_dft, feats.data() + (size_t) j0*n_embd, n_chunk, j0);
+
+            common_batch_clear(batch);
+            for (int32_t k = 0; k < n_chunk; ++k) {
+                common_batch_add(batch, prompt[j0 + k + 1], j0 + k, { 0 }, false);
+            }
+
+            llama_decode(ctx_dft, batch);
+        }
+
+        tokens_pair.assign(prompt.begin() + 1, prompt.end());
+        n_verified = n1 - 1;
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        result.clear();
+
+        const int32_t seq_len = (int32_t) prompt_tgt.size();
+        if (seq_len == 0) {
+            return;
+        }
+
+        auto * mem_dft = llama_get_memory(ctx_dft);
+
+        // drop the speculative pairs of the previous round - they were computed with the
+        // draft's own approximate features and are re-fed below with true target features
+        if ((int32_t) tokens_pair.size() > n_verified) {
+            llama_memory_seq_rm(mem_dft, 0, n_verified, -1);
+            tokens_pair.resize(n_verified);
+        }
+
+        // consistency guard: the verified prefix must match the current target sequence
+        {
+            int32_t j = 0;
+            while (j < n_verified && tokens_pair[j] == pair_token(prompt_tgt, id_last, j)) {
+                j++;
+            }
+            if (j < n_verified) {
+                LOG_DBG("%s: target sequence diverged at pair %d (n_verified = %d)\n", __func__, j, n_verified);
+                llama_memory_seq_rm(mem_dft, 0, j, -1);
+                tokens_pair.resize(j);
+                n_verified = j;
+            }
+        }
+
+        // feed the newly verified pairs j = n_verified..seq_len-1 with the true target
+        // features from the last target decode (row j - pos_base_tgt)
+        const int32_t n_new = seq_len - n_verified;
+        if (n_new <= 0) {
+            // no fresh logits to draft from - should not happen in the normal flow
+            LOG_DBG("%s: no new verified pairs (seq_len = %d, n_verified = %d)\n", __func__, seq_len, n_verified);
+            pos_base_tgt = seq_len;
+            return;
+        }
+
+        feats.resize((size_t) n_new*n_embd);
+        for (int32_t j = n_verified; j < seq_len; ++j) {
+            const int32_t row = j - pos_base_tgt;
+            GGML_ASSERT(row >= 0 && "missing target hidden state for verified pair");
+            const float * f = llama_get_embeddings_ith(ctx_tgt, row);
+            GGML_ASSERT(f != nullptr && "target context must run with embeddings enabled for eagle1");
+            memcpy(feats.data() + (size_t) (j - n_verified)*n_embd, f, n_embd*sizeof(float));
+        }
+
+        llama_set_eagle_hidden(ctx_dft, feats.data(), n_new, n_verified);
+
+        common_batch_clear(batch);
+        for (int32_t j = n_verified; j < seq_len; ++j) {
+            common_batch_add(batch, pair_token(prompt_tgt, id_last, j), j, { 0 }, j == seq_len - 1);
+            tokens_pair.push_back(pair_token(prompt_tgt, id_last, j));
+        }
+
+        llama_decode(ctx_dft, batch);
+
+        n_verified = seq_len;
+
+        // the upcoming verify decode starts with id_last at target position seq_len
+        pos_base_tgt = seq_len;
+
+        // autoregressive draft loop (greedy chain)
+        feats.resize(n_embd);
+
+        for (int i = 0; i < params.n_max; ++i) {
+            const float * logits = llama_get_logits_ith(ctx_dft, -1);
+
+            int32_t   best   = 0;
+            float     l_best = logits[0];
+            for (int32_t t = 1; t < n_vocab; ++t) {
+                if (logits[t] > l_best) {
+                    l_best = logits[t];
+                    best   = t;
+                }
+            }
+
+            // confidence of the greedy token (softmax)
+            double sum = 0.0;
+            for (int32_t t = 0; t < n_vocab; ++t) {
+                sum += expf(logits[t] - l_best);
+            }
+            const float p_best = (float) (1.0/sum);
+
+            LOG_DBG(" - eagle1 draft candidate %3d: %6d (%8.3f) '%s'\n",
+                    i, best, p_best, common_token_to_piece(ctx_dft, best).c_str());
+
+            result.push_back(best);
+
+            if (params.n_max <= (int) result.size()) {
+                break;
+            }
+
+            // only continue on high-confidence drafts
+            if (p_best < params.p_min) {
+                break;
+            }
+
+            // next step: feature = the draft's own raw layer output (copy before decoding)
+            const float * f = llama_get_embeddings_ith(ctx_dft, -1);
+            memcpy(feats.data(), f, n_embd*sizeof(float));
+
+            const llama_pos pos = seq_len + i;
+
+            llama_set_eagle_hidden(ctx_dft, feats.data(), 1, pos);
+
+            common_batch_clear(batch);
+            common_batch_add(batch, best, pos, { 0 }, true);
+
+            llama_decode(ctx_dft, batch);
+
+            tokens_pair.push_back(best); // speculative pair (> n_verified), dropped next round
+        }
+    }
+
+    void accept(uint16_t n_accepted) override {
+        // noop - draft() reconciles from prompt_tgt growth (accept is not called by all callers)
+        GGML_UNUSED(n_accepted);
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_ngram_simple_config config;
@@ -780,6 +1000,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
     switch (type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
+        case COMMON_SPECULATIVE_TYPE_EAGLE1:        return "eagle1";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
@@ -839,8 +1060,21 @@ done:
 common_speculative * common_speculative_init(
         common_params_speculative & params,
         llama_context             * ctx_tgt) {
+    // an "eagle" draft model selects the EAGLE1 implementation
+    bool is_eagle1 = false;
+
     llama_context * ctx_dft = nullptr;
     if (params.model_dft) {
+        char arch_buf[64] = {0};
+        if (llama_model_meta_val_str(params.model_dft, "general.architecture", arch_buf, sizeof(arch_buf)) >= 0) {
+            is_eagle1 = strcmp(arch_buf, "eagle") == 0;
+        }
+
+        if (is_eagle1) {
+            // the draft reads back its own raw layer output as the next-step feature
+            params.cparams_dft.embeddings = true;
+        }
+
         ctx_dft = llama_init_from_model(params.model_dft, params.cparams_dft);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s", "failed to create draft context\n");
@@ -851,7 +1085,8 @@ common_speculative * common_speculative_init(
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft = !params.mparams_dft.path.empty();
+        bool has_draft = !params.mparams_dft.path.empty() && !is_eagle1;
+        bool has_draft_eagle1 = is_eagle1;
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
@@ -895,6 +1130,9 @@ common_speculative * common_speculative_init(
         if (has_draft) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT, params));
         }
+        if (has_draft_eagle1) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE1, params));
+        }
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3, params));
         }
@@ -912,6 +1150,13 @@ common_speculative * common_speculative_init(
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
                     /* .replacements = */ params.replacements
+                ));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_EAGLE1: {
+                impls.push_back(std::make_unique<common_speculative_state_eagle1>(config.type,
+                    /* .ctx_tgt = */ ctx_tgt,
+                    /* .ctx_dft = */ ctx_dft
                 ));
                 break;
             }
