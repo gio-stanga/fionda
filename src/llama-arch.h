@@ -136,6 +136,7 @@ enum llm_arch {
     LLM_ARCH_LLAMA_EMBED,
     LLM_ARCH_MAINCODER,
     LLM_ARCH_KIMI_LINEAR,
+    LLM_ARCH_EAGLE,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -552,6 +553,7 @@ enum llm_tensor {
     LLM_TENSOR_NEXTN_HNORM,
     LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
     LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
+    LLM_TENSOR_FC, // EAGLE1 draft: projects concat(token_embd, target hidden state) -> n_embd
 };
 
 enum llm_tensor_layer {
