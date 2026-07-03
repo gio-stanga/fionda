@@ -523,6 +523,10 @@ struct llama_model {
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
 
+    // EAGLE1 draft: projects concat(token_embd, target hidden state) -> n_embd
+    struct ggml_tensor * fc   = nullptr;
+    struct ggml_tensor * fc_b = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;

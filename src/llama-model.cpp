@@ -578,6 +578,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     }
                 }
             } break;
+        case LLM_ARCH_EAGLE:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                type = LLM_TYPE_UNKNOWN;
+            } break;
         case LLM_ARCH_LLAMA4:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -3005,6 +3010,35 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                                 layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
                             }
                         }
+                    }
+                } break;
+            case LLM_ARCH_EAGLE:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // lm_head copied from the target model; applied to the raw layer output (no output_norm)
+                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, 0);
+
+                    fc   = create_tensor(tn(LLM_TENSOR_FC, "weight"), {2*n_embd, n_embd}, 0);
+                    fc_b = create_tensor(tn(LLM_TENSOR_FC, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        // EAGLE1 skips input_layernorm on its only layer - no attn_norm
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                     }
                 } break;
             case LLM_ARCH_LLADA:
@@ -8686,6 +8720,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_llama<false>>(*this, params);
             } break;
+        case LLM_ARCH_EAGLE:
+            {
+                llm = std::make_unique<llm_build_eagle>(*this, params);
+            } break;
         case LLM_ARCH_LLAMA4:
             {
                 if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
@@ -9369,6 +9407,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
+        case LLM_ARCH_EAGLE:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
