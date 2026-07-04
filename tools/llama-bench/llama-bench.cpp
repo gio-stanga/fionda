@@ -23,6 +23,8 @@
 #include "download.h"
 #include "ggml.h"
 #include "llama.h"
+#include "sampling.h"
+#include "speculative.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -31,6 +33,9 @@
 #    endif
 #    include <windows.h>
 #endif
+
+// size of the untimed seed prompt used to bootstrap speculative (draft model) tg tests
+static const int BENCH_SPEC_N_SEED = 16;
 
 // utils
 static uint64_t get_time_ns() {
@@ -343,6 +348,9 @@ struct cmd_params {
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
     std::vector<bool>                fionda_mode;
+    std::vector<std::string>         model_draft;
+    std::vector<int>                 draft_max;
+    std::vector<float>               draft_p_min;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -386,6 +394,9 @@ static const cmd_params cmd_params_defaults = {
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
     /* fionda_mode          */ { false },
+    /* model_draft          */ { "" },
+    /* draft_max            */ { 4 },
+    /* draft_p_min          */ { 0.75f },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -454,6 +465,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("  --fionda <0|1>                              (default: %s)\n", join(cmd_params_defaults.fionda_mode, ",").c_str());
+    printf("  -md, --model-draft <filename>               draft model for speculative decoding of tg tests (default: none)\n");
+    printf("  --draft-max <n>                             max tokens to draft per round (default: %s)\n", join(cmd_params_defaults.draft_max, ",").c_str());
+    printf("  --draft-p-min <f>                           min draft token probability to keep drafting (default: %s)\n", join(cmd_params_defaults.draft_p_min, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -823,6 +837,27 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.no_host.insert(params.no_host.end(), p.begin(), p.end());
             } else if (arg == "--fionda") {
                 params.fionda_mode.push_back(true);
+            } else if (arg == "-md" || arg == "--model-draft") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.model_draft.insert(params.model_draft.end(), p.begin(), p.end());
+            } else if (arg == "--draft-max") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<int>(argv[i], split_delim);
+                params.draft_max.insert(params.draft_max.end(), p.begin(), p.end());
+            } else if (arg == "--draft-p-min") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<float>(argv[i], split_delim);
+                params.draft_p_min.insert(params.draft_p_min.end(), p.begin(), p.end());
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1074,6 +1109,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.fionda_mode.empty()) {
         params.fionda_mode = cmd_params_defaults.fionda_mode;
     }
+    if (params.model_draft.empty()) {
+        params.model_draft = cmd_params_defaults.model_draft;
+    }
+    if (params.draft_max.empty()) {
+        params.draft_max = cmd_params_defaults.draft_max;
+    }
+    if (params.draft_p_min.empty()) {
+        params.draft_p_min = cmd_params_defaults.draft_p_min;
+    }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
@@ -1118,6 +1162,9 @@ struct cmd_params_instance {
     bool               no_op_offload;
     bool               no_host;
     bool               fionda_mode;
+    std::string        model_draft;
+    int                draft_max;
+    float              draft_p_min;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1187,7 +1234,8 @@ struct cmd_params_instance {
     llama_context_params to_llama_cparams() const {
         llama_context_params cparams = llama_context_default_params();
 
-        cparams.n_ctx           = n_prompt + n_gen + n_depth;
+        cparams.n_ctx           = n_prompt + n_gen + n_depth +
+                                  (model_draft.empty() ? 0 : BENCH_SPEC_N_SEED + draft_max + 8);
         cparams.n_batch         = n_batch;
         cparams.n_ubatch        = n_ubatch;
         cparams.type_k          = type_k;
@@ -1219,6 +1267,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & dio : params.use_direct_io)
     for (const auto & noh : params.no_host)
     for (const auto & fionda : params.fionda_mode)
+    for (const auto & md : params.model_draft)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
@@ -1264,9 +1313,22 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
                 /* .fionda_mode  = */ fionda,
+                /* .model_draft  = */ md,
+                /* .draft_max    = */ params.draft_max[0],
+                /* .draft_p_min  = */ params.draft_p_min[0],
             };
             instances.push_back(instance);
         }
+
+        // draft params only affect generation - don't multiply pp-only instances by them,
+        // and don't sweep them at all when no draft model is set
+        for (size_t i_dm = 0; i_dm < params.draft_max.size(); i_dm++)
+        for (size_t i_pm = 0; i_pm < params.draft_p_min.size(); i_pm++) {
+            if (md.empty() && (i_dm > 0 || i_pm > 0)) {
+                continue;
+            }
+            const int   dm   = params.draft_max[i_dm];
+            const float pmin = params.draft_p_min[i_pm];
 
         for (const auto & n_gen : params.n_gen) {
             if (n_gen == 0) {
@@ -1300,6 +1362,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
                 /* .fionda_mode  = */ fionda,
+                /* .model_draft  = */ md,
+                /* .draft_max    = */ dm,
+                /* .draft_p_min  = */ pmin,
             };
             instances.push_back(instance);
         }
@@ -1336,8 +1401,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
                 /* .fionda_mode  = */ fionda,
+                /* .model_draft  = */ md,
+                /* .draft_max    = */ dm,
+                /* .draft_p_min  = */ pmin,
             };
             instances.push_back(instance);
+        }
         }
     }
     // clang-format on
@@ -1377,11 +1446,19 @@ struct test {
     bool                     no_op_offload;
     bool                     no_host;
     bool                     fionda_mode;
+    std::string              model_draft;
+    int                      draft_max;
+    float                    draft_p_min;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
+    // speculative (draft model) runs only: actual tokens generated per rep (the last round can
+    // overshoot n_gen by up to draft_max-1 accepted tokens) and draft acceptance totals
+    std::vector<int>         samples_n_tokens;
+    uint64_t                 n_drafted  = 0;
+    uint64_t                 n_accepted = 0;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
         cpu_info(get_cpu_info()),
@@ -1416,6 +1493,9 @@ struct test {
         no_op_offload  = inst.no_op_offload;
         no_host        = inst.no_host;
         fionda_mode    = inst.fionda_mode;
+        model_draft    = inst.model_draft;
+        draft_max      = inst.draft_max;
+        draft_p_min    = inst.draft_p_min;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1432,10 +1512,12 @@ struct test {
     uint64_t stdev_ns() const { return ::stdev(samples_ns); }
 
     std::vector<double> get_ts() const {
-        int                 n_tokens = n_prompt + n_gen;
         std::vector<double> ts;
-        std::transform(samples_ns.begin(), samples_ns.end(), std::back_inserter(ts),
-                       [n_tokens](uint64_t t) { return 1e9 * n_tokens / t; });
+        for (size_t i = 0; i < samples_ns.size(); i++) {
+            // speculative runs record the actual number of generated tokens per rep
+            const int n_tokens = samples_n_tokens.empty() ? n_prompt + n_gen : samples_n_tokens[i];
+            ts.push_back(1e9 * n_tokens / samples_ns[i]);
+        }
         return ts;
     }
 
@@ -1473,7 +1555,8 @@ struct test {
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
-            "no_op_offload",  "no_host",        "fionda_mode",   "n_prompt",       "n_gen",
+            "no_op_offload",  "no_host",        "fionda_mode",   "model_draft",    "draft_max",
+            "draft_p_min",    "n_drafted",      "n_accepted",    "n_prompt",       "n_gen",
             "n_depth",        "test_time",      "avg_ns",        "stddev_ns",      "avg_ts",
             "stddev_ts"
         };
@@ -1486,7 +1569,8 @@ struct test {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
-            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
+            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
+            field == "draft_max" || field == "n_drafted" || field == "n_accepted") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
@@ -1494,7 +1578,7 @@ struct test {
             field == "fionda_mode") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "draft_p_min") {
             return FLOAT;
         }
         return STRING;
@@ -1569,6 +1653,11 @@ struct test {
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
                                             std::to_string(fionda_mode),
+                                            model_draft,
+                                            std::to_string(draft_max),
+                                            std::to_string(draft_p_min),
+                                            std::to_string(n_drafted),
+                                            std::to_string(n_accepted),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1766,6 +1855,15 @@ struct markdown_printer : public printer {
         if (field == "fionda_mode") {
             return 7;
         }
+        if (field == "draft_max") {
+            return 3;
+        }
+        if (field == "draft_p_min") {
+            return 5;
+        }
+        if (field == "accept%") {
+            return 8;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1808,6 +1906,12 @@ struct markdown_printer : public printer {
         }
         if (field == "fionda_mode") {
             return "fionda";
+        }
+        if (field == "draft_max") {
+            return "dm";
+        }
+        if (field == "draft_p_min") {
+            return "pmin";
         }
         if (field == "devices") {
             return "dev";
@@ -1899,8 +2003,20 @@ struct markdown_printer : public printer {
         if (params.fionda_mode.size() > 1 || params.fionda_mode != cmd_params_defaults.fionda_mode) {
             fields.emplace_back("fionda_mode");
         }
+        const bool has_draft = params.model_draft.size() > 1 || params.model_draft != cmd_params_defaults.model_draft;
+        if (has_draft) {
+            // dm is always shown with a draft so sweep rows are distinguishable; the draft model
+            // path itself is omitted to keep the table narrow
+            fields.emplace_back("draft_max");
+        }
+        if (params.draft_p_min.size() > 1 || params.draft_p_min != cmd_params_defaults.draft_p_min) {
+            fields.emplace_back("draft_p_min");
+        }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
+        if (has_draft) {
+            fields.emplace_back("accept%");
+        }
 
         fprintf(fout, "|");
         for (const auto & field : fields) {
@@ -1955,6 +2071,13 @@ struct markdown_printer : public printer {
                 value = buf;
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
+                value = buf;
+            } else if (field == "accept%") {
+                if (t.n_drafted > 0) {
+                    snprintf(buf, sizeof(buf), "%.1f%%", 100.0 * t.n_accepted / t.n_drafted);
+                } else {
+                    snprintf(buf, sizeof(buf), "-");
+                }
                 value = buf;
             } else if (vmap.find(field) != vmap.end()) {
                 value = vmap.at(field);
@@ -2073,6 +2196,95 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
     return true;
 }
 
+// speculative (draft model) token generation - real greedy generation instead of the random-token
+// decode of test_gen, since draft acceptance is only meaningful on model-generated text.
+// the seed prompt and common_speculative_begin() run before the timer starts; the timed section
+// reports the actual number of generated tokens (the last round can overshoot n_gen by up to
+// draft_max-1 accepted tokens, and verified work cannot be discarded without biasing t/s).
+static bool test_gen_spec(llama_context * ctx, common_speculative * spec,
+                          const common_params_speculative & params_spec, int n_gen, int n_threads,
+                          uint64_t & t_ns, int & n_tokens_out, uint64_t & n_drafted, uint64_t & n_accepted) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+
+    const llama_model * model   = llama_get_model(ctx);
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
+
+    std::vector<llama_token> seed(BENCH_SPEC_N_SEED);
+    seed[0] = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+    for (int i = 1; i < BENCH_SPEC_N_SEED; i++) {
+        seed[i] = std::rand() % n_vocab;
+    }
+
+    // decode all but the last seed token; with embeddings enabled this leaves the per-position
+    // hidden states that common_speculative_begin() reads
+    if (llama_decode(ctx, llama_batch_get_one(seed.data(), seed.size() - 1)) != 0) {
+        fprintf(stderr, "%s: failed to decode seed prompt\n", __func__);
+        return false;
+    }
+
+    llama_token  id_last = seed.back();
+    llama_tokens prompt_tgt(seed.begin(), seed.end() - 1);
+    llama_pos    n_past = (llama_pos) seed.size() - 1;
+
+    common_speculative_begin(spec, prompt_tgt);
+    llama_synchronize(ctx);
+
+    common_params_sampling sparams;
+    sparams.temp = 0.0f; // greedy - required for meaningful acceptance measurement
+
+    common_sampler * smpl      = common_sampler_init(model, sparams);
+    llama_batch      batch_tgt = llama_batch_init(params_spec.n_max + 1, 0, 1);
+
+    bool ok        = true;
+    int  n_predict = 0;
+
+    const uint64_t t_start = get_time_ns();
+
+    // no EOG stop: the bench must always produce n_gen tokens. post-EOG text can degenerate and
+    // inflate acceptance slightly - acceptable for a throughput benchmark
+    while (n_predict < n_gen) {
+        llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
+
+        common_batch_clear(batch_tgt);
+        common_batch_add(batch_tgt, id_last, n_past++, { 0 }, true);
+        for (size_t i = 0; i < draft.size(); ++i) {
+            common_batch_add(batch_tgt, draft[i], n_past + (llama_pos) i, { 0 }, true);
+        }
+
+        if (llama_decode(ctx, batch_tgt) != 0) {
+            fprintf(stderr, "%s: failed to decode verification batch\n", __func__);
+            ok = false;
+            break;
+        }
+
+        const auto ids = common_sampler_sample_and_accept_n(smpl, ctx, draft);
+        GGML_ASSERT(!ids.empty());
+
+        n_past     += (llama_pos) ids.size() - 1;
+        n_drafted  += draft.size();
+        n_accepted += ids.size() - 1;
+        n_predict  += (int) ids.size();
+
+        for (size_t i = 0; i < ids.size(); ++i) {
+            prompt_tgt.push_back(id_last);
+            id_last = ids[i];
+        }
+
+        // trim the rejected draft tail from the target KV cache
+        llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past, -1);
+    }
+
+    llama_synchronize(ctx);
+    t_ns         = get_time_ns() - t_start;
+    n_tokens_out = n_predict;
+
+    llama_batch_free(batch_tgt);
+    common_sampler_free(smpl);
+
+    return ok;
+}
+
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
     (void) level;
     (void) text;
@@ -2159,6 +2371,10 @@ int main(int argc, char ** argv) {
     llama_model *               lmodel    = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
 
+    // draft model for speculative decoding, cached by path like lmodel is cached by equal_mparams
+    llama_model * lmodel_draft    = nullptr;
+    std::string   prev_draft_path;
+
     // store the llama_context state at the previous depth that we performed a test
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
     ctx_state cstate;
@@ -2170,6 +2386,17 @@ int main(int argc, char ** argv) {
         if (params.progress) {
             fprintf(stderr, "llama-bench: benchmark %d/%zu: starting\n", params_idx, params_count);
         }
+        if (!inst.model_draft.empty()) {
+            if (inst.n_depth > 0) {
+                fprintf(stderr, "%s: error: --model-draft is not supported with -d/--n-depth\n", __func__);
+                return 1;
+            }
+            if (inst.n_prompt > 0 && inst.n_gen > 0) {
+                fprintf(stderr, "%s: error: --model-draft is not supported with -pg, use separate -p/-n tests\n", __func__);
+                return 1;
+            }
+        }
+
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
             if (lmodel) {
@@ -2184,6 +2411,25 @@ int main(int argc, char ** argv) {
             prev_inst = &inst;
         }
 
+        if (inst.model_draft != prev_draft_path) {
+            if (lmodel_draft) {
+                llama_model_free(lmodel_draft);
+                lmodel_draft = nullptr;
+            }
+            if (!inst.model_draft.empty()) {
+                // the draft model always lives fully in VRAM - never streamed by fionda
+                llama_model_params mparams_draft = llama_model_default_params();
+                mparams_draft.n_gpu_layers = 99;
+
+                lmodel_draft = llama_model_load_from_file(inst.model_draft.c_str(), mparams_draft);
+                if (lmodel_draft == NULL) {
+                    fprintf(stderr, "%s: error: failed to load draft model '%s'\n", __func__, inst.model_draft.c_str());
+                    return 1;
+                }
+            }
+            prev_draft_path = inst.model_draft;
+        }
+
         llama_context * ctx = llama_init_from_model(lmodel, inst.to_llama_cparams());
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
@@ -2191,7 +2437,34 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        if (!inst.model_draft.empty()) {
+            // EAGLE reads the target's hidden states, which requires embeddings output. this also
+            // applies to pp-only tests so they report the faithful prompt cost of running with a
+            // draft (logits+embeddings are computed for every prompt token)
+            llama_set_embeddings(ctx, true);
+        }
+
         test t(inst, lmodel, ctx);
+
+        common_speculative *      spec = nullptr;
+        common_params_speculative params_spec;
+        if (!inst.model_draft.empty() && t.n_gen > 0) {
+            params_spec.model_dft        = lmodel_draft;
+            params_spec.mparams_dft.path = inst.model_draft;
+            params_spec.n_max            = inst.draft_max;
+            params_spec.n_min            = 0;
+            params_spec.p_min            = inst.draft_p_min;
+            params_spec.cparams_dft      = llama_context_default_params();
+            params_spec.cparams_dft.n_ctx   = llama_n_ctx(ctx);
+            params_spec.cparams_dft.n_batch = 512;
+
+            spec = common_speculative_init(params_spec, ctx);
+            if (spec == NULL) {
+                fprintf(stderr, "%s: error: failed to initialize speculative decoding with draft model '%s'\n",
+                        __func__, inst.model_draft.c_str());
+                return 1;
+            }
+        }
 
         llama_memory_clear(llama_get_memory(ctx), false);
 
@@ -2240,7 +2513,16 @@ int main(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
                 }
-                bool res = test_gen(ctx, 1, t.n_threads);
+                bool res;
+                if (spec) {
+                    // warm up both the target and the draft model with one speculative round
+                    uint64_t ns = 0, nd = 0, na = 0;
+                    int      nt = 0;
+                    res = test_gen_spec(ctx, spec, params_spec, 1, t.n_threads, ns, nt, nd, na);
+                    llama_memory_clear(llama_get_memory(ctx), false);
+                } else {
+                    res = test_gen(ctx, 1, t.n_threads);
+                }
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
                     llama_free(ctx);
@@ -2290,6 +2572,28 @@ int main(int argc, char ** argv) {
                 }
             }
 
+            if (spec && t.n_gen > 0) {
+                // speculative generation times itself: the seed prompt and begin() are untimed
+                // and must re-run each rep because the memory clear above wiped the target KV
+                if (params.progress) {
+                    fprintf(stderr, "llama-bench: benchmark %d/%zu: speculative generation run %d/%d\n", params_idx,
+                            params_count, i + 1, params.reps);
+                }
+                uint64_t t_ns = 0;
+                int      n_tokens = 0;
+                bool res = test_gen_spec(ctx, spec, params_spec, t.n_gen, t.n_threads, t_ns, n_tokens,
+                                         t.n_drafted, t.n_accepted);
+                if (!res) {
+                    fprintf(stderr, "%s: error: failed to run speculative gen\n", __func__);
+                    llama_free(ctx);
+                    llama_model_free(lmodel);
+                    exit(1);
+                }
+                t.samples_ns.push_back(t_ns);
+                t.samples_n_tokens.push_back(n_tokens);
+                continue;
+            }
+
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
@@ -2335,11 +2639,19 @@ int main(int argc, char ** argv) {
 
         llama_perf_context_print(ctx);
 
+        if (spec) {
+            // must precede llama_free(ctx): frees the draft context, which references lmodel_draft
+            common_speculative_free(spec);
+        }
+
         llama_free(ctx);
 
         ggml_threadpool_free_fn(threadpool);
     }
 
+    if (lmodel_draft) {
+        llama_model_free(lmodel_draft);
+    }
     llama_model_free(lmodel);
 
     if (p) {
