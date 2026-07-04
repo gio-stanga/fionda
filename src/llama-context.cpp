@@ -1073,6 +1073,16 @@ void llama_context::set_embeddings(bool value) {
     //sched_need_reserve = true;
 }
 
+void llama_context::set_eagle_hidden(const float * data, int32_t n_tokens, llama_pos pos_base) {
+    const int64_t n_embd = model.hparams.n_embd;
+
+    eagle_hid.n_embd   = n_embd;
+    eagle_hid.pos_base = pos_base;
+
+    eagle_hid.data.resize((size_t) n_tokens*n_embd);
+    memcpy(eagle_hid.data.data(), data, (size_t) n_tokens*n_embd*sizeof(float));
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -2195,6 +2205,7 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.eagle_hid   =*/ &eagle_hid,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3087,6 +3098,10 @@ int32_t llama_n_threads_batch(llama_context * ctx) {
 
 void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
     ctx->set_abort_callback(abort_callback, abort_callback_data);
+}
+
+void llama_set_eagle_hidden(llama_context * ctx, const float * data, int32_t n_tokens, llama_pos pos_base) {
+    ctx->set_eagle_hidden(data, n_tokens, pos_base);
 }
 
 void llama_set_embeddings(llama_context * ctx, bool embeddings) {

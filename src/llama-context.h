@@ -103,6 +103,9 @@ struct llama_context {
 
     void set_embeddings (bool value);
     void set_causal_attn(bool value);
+
+    // EAGLE1 draft: set per-position hidden states for subsequent decodes
+    void set_eagle_hidden(const float * data, int32_t n_tokens, llama_pos pos_base);
     void set_warmup(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -262,6 +265,8 @@ private:
     llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
+
+    llama_eagle_hidden eagle_hid; // EAGLE1 draft: hidden states from the target model
 
     std::unique_ptr<llama_memory_i> memory;
 
