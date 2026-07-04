@@ -975,6 +975,16 @@ extern "C" {
     // TODO: rename to avoid confusion with llama_get_embeddings()
     LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
 
+    // EAGLE1 draft models: set the per-position hidden states of the target model that the
+    // draft graph consumes as an extra input. rows are gathered by absolute sequence position:
+    // row i of data corresponds to position pos_base + i. valid for subsequent decodes until
+    // replaced. single-sequence only.
+    LLAMA_API void llama_set_eagle_hidden(
+            struct llama_context * ctx,
+                     const float * data,
+                         int32_t   n_tokens,
+                       llama_pos   pos_base);
+
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
