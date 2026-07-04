@@ -398,6 +398,9 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (arch == LLM_ARCH_PLM) {
             continue; // TODO tensor shapes
         }
+        if (arch == LLM_ARCH_EAGLE) {
+            continue; // EAGLE1 draft model requires external hidden states from a target model.
+        }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
                 continue;
@@ -462,6 +465,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         }
         if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
             continue; // FIXME Embedding (?) models produce inconsistent results.
+        }
+        if (arch == LLM_ARCH_EAGLE) {
+            continue; // EAGLE1 draft model requires external hidden states from a target model.
         }
         if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
             continue; // FIXME RWKV models hang indefinitely.
