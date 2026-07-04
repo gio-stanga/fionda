@@ -342,6 +342,32 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_eagle_hidden::set_input(const llama_ubatch * ubatch) {
+    if (!hidden || eagle_hid->data.empty()) {
+        // no hidden states set (e.g. warmup/reserve pass) - leave the tensor as-is
+        return;
+    }
+
+    assert(hidden->type == GGML_TYPE_F32);
+
+    const int64_t n_embd = eagle_hid->n_embd;
+    GGML_ASSERT(n_embd == hidden->ne[0]);
+
+    const int64_t n_rows = (int64_t) eagle_hid->data.size() / n_embd;
+
+    // gather rows by absolute sequence position (single-sequence only)
+    for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+        const int64_t row = ubatch->pos[i] - eagle_hid->pos_base;
+
+        GGML_ASSERT(row >= 0 && row < n_rows && "eagle hidden state missing for ubatch position");
+
+        ggml_backend_tensor_set(hidden,
+                eagle_hid->data.data() + row*n_embd,
+                (size_t) i*n_embd*sizeof(float),
+                n_embd*sizeof(float));
+    }
+}
+
 static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
     const char * swa_type_str = "unknown";
@@ -929,6 +955,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    eagle_hid        (params.eagle_hid),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1778,6 +1805,21 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc  : hparams.n_ctx_train;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
+    ggml_set_input(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_eagle_hidden() const {
+    GGML_ASSERT(eagle_hid != nullptr);
+
+    auto inp = std::make_unique<llm_graph_input_eagle_hidden>(eagle_hid);
+
+    auto & cur = inp->hidden;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
     ggml_set_input(cur);
 
     res->add_input(std::move(inp));

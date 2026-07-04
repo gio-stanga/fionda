@@ -72,6 +72,17 @@ struct llama_cross {
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
 };
 
+// EAGLE1 draft model: per-position hidden states from the target model, fed as an extra
+// graph input alongside the token embeddings. rows are addressed by absolute sequence
+// position (single-sequence only). set via llama_set_eagle_hidden().
+struct llama_eagle_hidden {
+    int64_t   n_embd   = 0;
+    llama_pos pos_base = 0; // sequence position of row 0
+
+    // hidden states data copied to host memory, [n_embd, n_rows]
+    std::vector<float> data;
+};
+
 struct llm_graph_params;
 
 //
@@ -256,6 +267,19 @@ public:
     ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
 
     const llama_cross * cross;
+};
+
+class llm_graph_input_eagle_hidden : public llm_graph_input_i {
+public:
+    llm_graph_input_eagle_hidden(
+            const llama_eagle_hidden * eagle_hid) : eagle_hid(eagle_hid) {}
+    virtual ~llm_graph_input_eagle_hidden() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * hidden; // F32 [n_embd, n_tokens]
+
+    const llama_eagle_hidden * eagle_hid;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -541,6 +565,7 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_eagle_hidden     * eagle_hid;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -627,7 +652,8 @@ struct llm_graph_params {
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
-            cross == other.cross;
+            cross == other.cross &&
+            eagle_hid == other.eagle_hid;
     }
 };
 
@@ -749,6 +775,7 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_eagle_hidden     * eagle_hid;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -865,6 +892,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_cls() const;
 
     ggml_tensor * build_inp_cross_embd() const;
+    ggml_tensor * build_inp_eagle_hidden() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
     ggml_tensor * build_inp_pos_bucket_dec() const;
     ggml_tensor * build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const;
