@@ -4,12 +4,12 @@
 # L'offset e' il numero di layer equivalenti al VRAM del draft (~560 MB):
 # ~4 layer per un target Q4_K_M, ~2 layer per un target Q8_0.
 MODELS=(
-    "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf:4"
-    "../models/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf:2"
+    "/media/andrea/Volume3/ubuntu2404/Downloads/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf:4"
+    "/media/andrea/Volume3/ubuntu2404/Downloads/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf:2"
 )
 
 # draft EAGLE1 (residente in VRAM, mai streamato)
-DRAFT_MODEL="../models/eagle1-llama3.1-8b-instruct-q4_k_m.gguf"
+DRAFT_MODEL="/media/andrea/Volume3/ubuntu2404/Downloads/eagle1-llama3.1-8b-instruct-q4_k_m.gguf"
 DRAFT_MAX=4
 
 # numero di layer fissi sulla GPU
