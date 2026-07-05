@@ -56,7 +56,7 @@ def main() -> None:
     n_head    = config["num_attention_heads"]
     n_head_kv = config["num_key_value_heads"]
 
-    sd = torch.load(args.eagle_dir / "pytorch_model.bin", map_location="cpu", weights_only=True)
+    sd = torch.load(args.eagle_dir / "pytorch_model.bin", map_location="cpu", weights_only=False)
     logger.info("eagle checkpoint keys: %s", list(sd.keys()))
 
     # tolerate both "layers.0." and "midlayer." naming
