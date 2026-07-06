@@ -739,14 +739,10 @@ struct ggml_backend_sched {
 
     // fionda VRAM double buffering state
     bool fionda_enabled;
-    void * fionda_slots[2];
-    void * fionda_stream;
-    void * fionda_events[2];
+    bool fionda_active; // per-graph gate: restricts fionda to large (prompt processing) batches
+    struct ggml_backend_fionda_params fionda_params;
     int fionda_cur_slot;
     bool fionda_dma_in_flight;
-    ggml_fionda_memcpy_async_t fionda_memcpy_cb;
-    ggml_fionda_event_record_t fionda_event_record_cb;
-    ggml_fionda_compute_wait_event_t fionda_compute_wait_cb;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1461,40 +1457,53 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
+    // fionda only engages when both enabled and active (active gates it to prompt processing batches)
+    const bool fionda_on = sched->fionda_enabled && sched->fionda_active;
+
     // fionda DMA look-ahead
     auto fionda_start_dma = [&](int start_split_id) {
-        if (!sched->fionda_enabled) return false;
+        if (!fionda_on) return false;
         if (sched->fionda_dma_in_flight) return true;
+
+        const struct ggml_backend_fionda_params & fp = sched->fionda_params;
 
         for (int split_id = start_split_id; split_id < sched->n_splits; split_id++) {
             struct ggml_backend_sched_split * split = &splits[split_id];
-            
+
             size_t current_offset = 0;
             bool found_fionda = false;
-            
+
             for (int input_id = 0; input_id < split->n_inputs; input_id++) {
                 struct ggml_tensor * input = split->inputs[input_id];
                 ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, input);
 
                 if (input->buffer && input->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
                     ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
-                    
-                    found_fionda = true;
+
+                    const int slot = sched->fionda_cur_slot;
+
+                    if (!found_fionda) {
+                        // do not overwrite the slot while the split that last read it may still be running
+                        fp.stream_wait_event_cb(fp.transfer_stream, fp.slot_consumed[slot]);
+                        found_fionda = true;
+                    }
+
                     struct ggml_tensor * input_cpy = tensor_copy(input, split->backend_id, sched->cur_copy);
-                    
-                    int slot = sched->fionda_cur_slot;
-                    input_cpy->data = (char*)sched->fionda_slots[slot] + current_offset;
-                    
+
                     size_t size = ggml_nbytes(input);
-                    sched->fionda_memcpy_cb(input_cpy->data, input->data, size, sched->fionda_stream);
-                    
+                    GGML_ASSERT(current_offset + size <= fp.slot_size && "fionda: split weights exceed VRAM slot");
+
+                    input_cpy->data = (char*)fp.slots[slot] + current_offset;
+
+                    fp.memcpy_async_cb(input_cpy->data, input->data, size, fp.transfer_stream);
+
                     // align offset to 256 bytes
                     current_offset += (size + 255) & ~255;
                 }
             }
             if (found_fionda) {
                 int slot = sched->fionda_cur_slot;
-                sched->fionda_event_record_cb(sched->fionda_events[slot], sched->fionda_stream);
+                fp.event_record_cb(fp.slot_ready[slot], fp.transfer_stream);
                 sched->fionda_dma_in_flight = true;
                 return true;
             }
@@ -1510,6 +1519,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
         bool fionda_synced_this_split = false;
+        int  fionda_consumed_slot     = -1; // slot read by this split's kernels, if any
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -1518,7 +1528,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
 
             bool is_fionda_weight = false;
-            if (sched->fionda_enabled && input->buffer && input->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+            if (fionda_on && input->buffer && input->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
                 ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                 is_fionda_weight = true;
             }
@@ -1533,7 +1543,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 ggml_backend_tensor_copy(input, input_cpy);
             } else if (is_fionda_weight) {
                 if (!fionda_synced_this_split) {
-                    sched->fionda_compute_wait_cb(split_backend, sched->fionda_events[sched->fionda_cur_slot]);
+                    // this split's kernels read from the slot the pending DMA targeted
+                    fionda_consumed_slot = sched->fionda_cur_slot;
+                    sched->fionda_params.compute_wait_event_cb(split_backend, sched->fionda_params.slot_ready[fionda_consumed_slot]);
                     sched->fionda_cur_slot = 1 - sched->fionda_cur_slot;
                     sched->fionda_dma_in_flight = false;
                     fionda_start_dma(split_id + 1);
@@ -1685,6 +1697,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 j0 = j1;
             }
+        }
+
+        // fionda: mark the consumed slot as reusable once this split's kernels complete
+        if (fionda_consumed_slot != -1) {
+            sched->fionda_params.compute_event_record_cb(split_backend, sched->fionda_params.slot_consumed[fionda_consumed_slot]);
         }
 
         // record the event of this copy
@@ -1897,24 +1914,23 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
 void ggml_backend_sched_set_fionda(
         ggml_backend_sched_t sched,
         bool enabled,
-        void * slot0, void * slot1,
-        void * stream,
-        void * event0, void * event1,
-        ggml_fionda_memcpy_async_t memcpy_async_cb,
-        ggml_fionda_event_record_t event_record_cb,
-        ggml_fionda_compute_wait_event_t compute_wait_event_cb) {
+        const struct ggml_backend_fionda_params * params) {
     GGML_ASSERT(sched);
+    GGML_ASSERT(!enabled || params != NULL);
     sched->fionda_enabled = enabled;
-    sched->fionda_slots[0] = slot0;
-    sched->fionda_slots[1] = slot1;
-    sched->fionda_stream = stream;
-    sched->fionda_events[0] = event0;
-    sched->fionda_events[1] = event1;
+    sched->fionda_active  = true;
+    if (params) {
+        sched->fionda_params = *params;
+    } else {
+        memset(&sched->fionda_params, 0, sizeof(sched->fionda_params));
+    }
     sched->fionda_cur_slot = 0;
     sched->fionda_dma_in_flight = false;
-    sched->fionda_memcpy_cb = memcpy_async_cb;
-    sched->fionda_event_record_cb = event_record_cb;
-    sched->fionda_compute_wait_cb = compute_wait_event_cb;
+}
+
+void ggml_backend_sched_set_fionda_active(ggml_backend_sched_t sched, bool active) {
+    GGML_ASSERT(sched);
+    sched->fionda_active = active;
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
