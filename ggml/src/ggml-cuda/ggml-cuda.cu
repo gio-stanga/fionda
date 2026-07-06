@@ -5378,4 +5378,13 @@ void ggml_backend_cuda_fionda_compute_wait_event(ggml_backend_t backend, void * 
     CUDA_CHECK(cudaStreamWaitEvent(ctx->stream(), reinterpret_cast<cudaEvent_t>(event), 0));
 }
 
+void ggml_backend_cuda_fionda_compute_event_record(ggml_backend_t backend, void * event) {
+    ggml_backend_cuda_context * ctx = (ggml_backend_cuda_context *)backend->context;
+    CUDA_CHECK(cudaEventRecord(reinterpret_cast<cudaEvent_t>(event), ctx->stream()));
+}
+
+void ggml_backend_cuda_fionda_stream_wait_event(void * stream, void * event) {
+    CUDA_CHECK(cudaStreamWaitEvent(reinterpret_cast<cudaStream_t>(stream), reinterpret_cast<cudaEvent_t>(event), 0));
+}
+
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)

@@ -52,6 +52,8 @@ GGML_BACKEND_API void ggml_backend_cuda_fionda_event_destroy(void * event);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_memcpy_async(void * dst, const void * src, size_t size, void * stream);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_event_record(void * event, void * stream);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_compute_wait_event(ggml_backend_t backend, void * event);
+GGML_BACKEND_API void ggml_backend_cuda_fionda_compute_event_record(ggml_backend_t backend, void * event);
+GGML_BACKEND_API void ggml_backend_cuda_fionda_stream_wait_event(void * stream, void * event);
 
 #ifdef  __cplusplus
 }

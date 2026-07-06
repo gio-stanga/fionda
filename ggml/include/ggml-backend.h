@@ -309,16 +309,31 @@ extern "C" {
     typedef void (*ggml_fionda_memcpy_async_t)(void * dst, const void * src, size_t size, void * stream);
     typedef void (*ggml_fionda_event_record_t)(void * event, void * stream);
     typedef void (*ggml_fionda_compute_wait_event_t)(ggml_backend_t backend, void * event);
+    typedef void (*ggml_fionda_compute_event_record_t)(ggml_backend_t backend, void * event);
+    typedef void (*ggml_fionda_stream_wait_event_t)(void * stream, void * event);
+
+    struct ggml_backend_fionda_params {
+        void * slots[2];          // VRAM double buffer, each slot_size bytes
+        size_t slot_size;         // size of one slot in bytes
+        void * transfer_stream;   // dedicated H2D DMA stream
+        void * slot_ready[2];     // recorded on the transfer stream when DMA into slot i completes
+        void * slot_consumed[2];  // recorded on the compute stream when the split reading slot i is dispatched
+
+        ggml_fionda_memcpy_async_t         memcpy_async_cb;         // async H2D copy on a given stream
+        ggml_fionda_event_record_t         event_record_cb;         // record event on a given stream
+        ggml_fionda_compute_wait_event_t   compute_wait_event_cb;   // make the backend compute stream wait on event
+        ggml_fionda_compute_event_record_t compute_event_record_cb; // record event on the backend compute stream
+        ggml_fionda_stream_wait_event_t    stream_wait_event_cb;    // make a given stream wait on event
+    };
 
     GGML_API void ggml_backend_sched_set_fionda(
             ggml_backend_sched_t sched,
             bool enabled,
-            void * slot0, void * slot1,
-            void * stream,
-            void * event0, void * event1,
-            ggml_fionda_memcpy_async_t memcpy_async_cb,
-            ggml_fionda_event_record_t event_record_cb,
-            ggml_fionda_compute_wait_event_t compute_wait_event_cb);
+            const struct ggml_backend_fionda_params * params); // params may be NULL when enabled is false
+
+    // per-graph gate: fionda only engages when both enabled and active (default: active)
+    // used to restrict the DMA double buffer to prompt processing (large batches)
+    GGML_API void ggml_backend_sched_set_fionda_active(ggml_backend_sched_t sched, bool active);
 
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
 
