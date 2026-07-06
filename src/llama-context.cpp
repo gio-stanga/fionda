@@ -415,17 +415,14 @@ void llama_context::sched_reserve() {
 
 #ifdef GGML_USE_CUDA
     {
-        void * fionda_slots[2];
-        void * fionda_stream;
-        void * fionda_events[2];
-        if (model.get_fionda_state(fionda_slots, &fionda_stream, fionda_events)) {
-            ggml_backend_sched_set_fionda(sched.get(), true,
-                fionda_slots[0], fionda_slots[1],
-                fionda_stream,
-                fionda_events[0], fionda_events[1],
-                ggml_backend_cuda_fionda_memcpy_async,
-                ggml_backend_cuda_fionda_event_record,
-                ggml_backend_cuda_fionda_compute_wait_event);
+        struct ggml_backend_fionda_params fionda_params = {};
+        if (model.get_fionda_state(fionda_params)) {
+            fionda_params.memcpy_async_cb         = ggml_backend_cuda_fionda_memcpy_async;
+            fionda_params.event_record_cb         = ggml_backend_cuda_fionda_event_record;
+            fionda_params.compute_wait_event_cb   = ggml_backend_cuda_fionda_compute_wait_event;
+            fionda_params.compute_event_record_cb = ggml_backend_cuda_fionda_compute_event_record;
+            fionda_params.stream_wait_event_cb    = ggml_backend_cuda_fionda_stream_wait_event;
+            ggml_backend_sched_set_fionda(sched.get(), true, &fionda_params);
         }
     }
 #endif
@@ -585,17 +582,14 @@ void llama_context::sched_reserve() {
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
 #ifdef GGML_USE_CUDA
                 {
-                    void * fionda_slots[2];
-                    void * fionda_stream;
-                    void * fionda_events[2];
-                    if (model.get_fionda_state(fionda_slots, &fionda_stream, fionda_events)) {
-                        ggml_backend_sched_set_fionda(sched.get(), true,
-                            fionda_slots[0], fionda_slots[1],
-                            fionda_stream,
-                            fionda_events[0], fionda_events[1],
-                            ggml_backend_cuda_fionda_memcpy_async,
-                            ggml_backend_cuda_fionda_event_record,
-                            ggml_backend_cuda_fionda_compute_wait_event);
+                    struct ggml_backend_fionda_params fionda_params = {};
+                    if (model.get_fionda_state(fionda_params)) {
+                        fionda_params.memcpy_async_cb         = ggml_backend_cuda_fionda_memcpy_async;
+                        fionda_params.event_record_cb         = ggml_backend_cuda_fionda_event_record;
+                        fionda_params.compute_wait_event_cb   = ggml_backend_cuda_fionda_compute_wait_event;
+                        fionda_params.compute_event_record_cb = ggml_backend_cuda_fionda_compute_event_record;
+                        fionda_params.stream_wait_event_cb    = ggml_backend_cuda_fionda_stream_wait_event;
+                        ggml_backend_sched_set_fionda(sched.get(), true, &fionda_params);
                     }
                 }
 #endif
@@ -1269,6 +1263,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->set_inputs(&ubatch);
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+    }
+
+    // fionda is restricted to prompt processing: only batches large enough for the op_offload
+    // path (which is what produces the CPU-weight split inputs fionda streams) activate the
+    // DMA double buffer. token generation keeps the standard scheduling.
+    {
+        static const uint32_t fionda_min_batch = [] {
+            const char * env = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
+            return env ? (uint32_t) atoi(env) : 32u;
+        }();
+        ggml_backend_sched_set_fionda_active(sched.get(), ubatch.n_tokens >= fionda_min_batch);
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);

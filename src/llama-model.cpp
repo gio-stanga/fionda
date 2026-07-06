@@ -332,6 +332,7 @@ struct llama_model::impl {
         size_t       slot_size        = 0;       // size of one slot in bytes
         void *       transfer_stream  = nullptr; // dedicated cudaStream_t for H2D DMA
         void *       slot_ready[2]    = {};      // cudaEvent_t: slot N is fully transferred
+        void *       slot_consumed[2] = {};      // cudaEvent_t: the split reading slot N was dispatched
         int          cur_slot         = 0;       // slot currently being computed
         bool         initialized      = false;
     } fionda_vram;
@@ -348,6 +349,8 @@ llama_model::~llama_model() {
     // fionda: release VRAM double buffer resources
     if (pimpl->fionda_vram.initialized) {
 #ifdef GGML_USE_CUDA
+        ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_consumed[1]);
+        ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_consumed[0]);
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[1]);
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[0]);
         ggml_backend_cuda_fionda_stream_destroy(pimpl->fionda_vram.transfer_stream);
@@ -356,21 +359,19 @@ llama_model::~llama_model() {
     }
 }
 
-bool llama_model::get_fionda_state(void ** slots, void ** stream, void ** events) const {
-    if (!pimpl->fionda_vram.initialized) {
+bool llama_model::get_fionda_state(struct ggml_backend_fionda_params & params) const {
+    const auto & fv = pimpl->fionda_vram;
+    if (!fv.initialized) {
         return false;
     }
-    if (slots) {
-        slots[0] = pimpl->fionda_vram.slot[0];
-        slots[1] = pimpl->fionda_vram.slot[1];
-    }
-    if (stream) {
-        *stream = pimpl->fionda_vram.transfer_stream;
-    }
-    if (events) {
-        events[0] = pimpl->fionda_vram.slot_ready[0];
-        events[1] = pimpl->fionda_vram.slot_ready[1];
-    }
+    params.slots[0]         = fv.slot[0];
+    params.slots[1]         = fv.slot[1];
+    params.slot_size        = fv.slot_size;
+    params.transfer_stream  = fv.transfer_stream;
+    params.slot_ready[0]    = fv.slot_ready[0];
+    params.slot_ready[1]    = fv.slot_ready[1];
+    params.slot_consumed[0] = fv.slot_consumed[0];
+    params.slot_consumed[1] = fv.slot_consumed[1];
     return true;
 }
 
@@ -8199,6 +8200,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             ggml_backend_cuda_fionda_stream_create(&fv.transfer_stream);
             ggml_backend_cuda_fionda_event_create(&fv.slot_ready[0]);
             ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1]);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[0]);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[1]);
 #endif
 
             fv.cur_slot    = 0;

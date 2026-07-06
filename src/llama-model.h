@@ -571,7 +571,9 @@ struct llama_model {
     explicit llama_model(const struct llama_model_params & params);
     ~llama_model();
 
-    bool get_fionda_state(void ** slots, void ** stream, void ** events) const;
+    // fills the VRAM double-buffer state (slots, sizes, stream, events); callbacks are left
+    // untouched for the caller to assign. returns false when fionda is not initialized.
+    bool get_fionda_state(struct ggml_backend_fionda_params & params) const;
 
     void load_stats  (llama_model_loader & ml);
     void load_arch   (llama_model_loader & ml);
