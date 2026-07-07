@@ -671,6 +671,9 @@ private:
             params_dft.cache_type_k = params_spec.cache_type_k;
             params_dft.cache_type_v = params_spec.cache_type_v;
 
+            // the draft model always lives fully in VRAM - never streamed by fionda
+            params_dft.fionda_mode  = false;
+
             if (params_spec.cpuparams.n_threads > 0) {
                 params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
                 params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
