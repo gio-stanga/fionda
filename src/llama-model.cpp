@@ -3017,8 +3017,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-                    // lm_head copied from the target model; applied to the raw layer output (no output_norm)
-                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, 0);
+                    // lm_head copied from the target model; applied to the raw layer output (no output_norm).
+                    // may be absent - the target's lm_head is then shared via llama_set_eagle_lm_head()
+                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    if (!output) {
+                        LLAMA_LOG_INFO("%s: eagle: no lm_head in gguf - the target model's lm_head must be shared via llama_model_set_eagle_lm_head()\n", __func__);
+                    }
 
                     fc   = create_tensor(tn(LLM_TENSOR_FC, "weight"), {2*n_embd, n_embd}, 0);
                     fc_b = create_tensor(tn(LLM_TENSOR_FC, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
@@ -9320,6 +9325,30 @@ int32_t llama_model_n_swa(const llama_model * model) {
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
+}
+
+bool llama_model_set_eagle_lm_head(llama_model * model, const llama_model * model_tgt) {
+    ggml_tensor * head = model_tgt ? model_tgt->output : nullptr;
+
+    if (!head) {
+        LLAMA_LOG_WARN("%s: target model has no output tensor - cannot share lm_head\n", __func__);
+        return false;
+    }
+
+    if (head->ne[0] != model->hparams.n_embd || head->ne[1] != model->vocab.n_tokens()) {
+        LLAMA_LOG_WARN("%s: target lm_head shape [%lld, %lld] does not match draft [%u, %u]\n",
+                __func__, (long long) head->ne[0], (long long) head->ne[1], model->hparams.n_embd, model->vocab.n_tokens());
+        return false;
+    }
+
+    if (head->buffer && ggml_backend_buffer_is_host(head->buffer)) {
+        LLAMA_LOG_WARN("%s: shared lm_head resides in host memory - drafting will be slow "
+                "(offload the target's output layer to keep it in VRAM)\n", __func__);
+    }
+
+    model->eagle_lm_head = head;
+
+    return true;
 }
 
 const char * llama_model_cls_label(const struct llama_model * model, uint32_t i) {

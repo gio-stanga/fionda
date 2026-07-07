@@ -106,8 +106,12 @@ llm_build_eagle::llm_build_eagle(const llama_model & model, const llm_graph_para
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // lm_head (copied from the target model)
-    cur = build_lora_mm(model.output, cur);
+    // lm_head: the target model's tensor when shared (exact target head, no VRAM duplicate),
+    // otherwise the copy embedded in the draft gguf
+    ggml_tensor * lm_head = model.eagle_lm_head ? model.eagle_lm_head : model.output;
+    GGML_ASSERT(lm_head && "eagle draft has no lm_head - share the target's via llama_model_set_eagle_lm_head()");
+
+    cur = build_lora_mm(lm_head, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

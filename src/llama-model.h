@@ -527,6 +527,11 @@ struct llama_model {
     struct ggml_tensor * fc   = nullptr;
     struct ggml_tensor * fc_b = nullptr;
 
+    // EAGLE1 draft: lm_head shared from the target model (used when the draft gguf has no
+    // output tensor). owned by the target model, which must outlive this model.
+    // set via llama_model_set_eagle_lm_head() before creating a context.
+    struct ggml_tensor * eagle_lm_head = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;

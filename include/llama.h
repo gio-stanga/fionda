@@ -985,6 +985,15 @@ extern "C" {
                          int32_t   n_tokens,
                        llama_pos   pos_base);
 
+    // EAGLE1 draft models: share the target model's lm_head tensor with the draft model
+    // instead of the draft's own copy (the draft gguf may omit its output tensor entirely).
+    // call before creating the draft context. the target model must outlive the draft model.
+    // returns false when the target has no output tensor or its shape does not match the
+    // draft's embedding/vocab dimensions.
+    LLAMA_API bool llama_model_set_eagle_lm_head(
+              struct llama_model * model,
+        const struct llama_model * model_tgt);
+
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
