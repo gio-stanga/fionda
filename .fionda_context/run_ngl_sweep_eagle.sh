@@ -1,15 +1,16 @@
 #!/bin/bash
 
 # modelli da testare, con offset EAGLE quant-aware ("path:offset").
-# L'offset e' il numero di layer equivalenti al VRAM del draft (~560 MB):
-# ~4 layer per un target Q4_K_M, ~2 layer per un target Q8_0.
+# L'offset e' il numero di layer equivalenti al VRAM del draft. Con il draft "nohead"
+# (lm_head condivisa col target a runtime) il draft occupa solo ~160 MB in VRAM:
+# ~1 layer sia per Q4_K_M che per Q8_0. Verificare con nvidia-smi alla prima run.
 MODELS=(
-    "/media/andrea/Volume3/ubuntu2404/Downloads/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf:4"
-    "/media/andrea/Volume3/ubuntu2404/Downloads/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf:2"
+    "/media/andrea/Volume3/ubuntu2404/Downloads/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf:1"
+    "/media/andrea/Volume3/ubuntu2404/Downloads/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf:1"
 )
 
-# draft EAGLE1 (residente in VRAM, mai streamato)
-DRAFT_MODEL="/media/andrea/Volume3/ubuntu2404/Downloads/eagle1-llama3.1-8b-instruct-q4_k_m.gguf"
+# draft EAGLE1 (residente in VRAM, mai streamato; senza lm_head - condivisa col target)
+DRAFT_MODEL="/media/andrea/Volume3/ubuntu2404/Downloads/eagle1-llama3.1-8b-instruct-nohead-q4_k_m.gguf"
 DRAFT_MAX=4
 
 # numero di layer fissi sulla GPU
