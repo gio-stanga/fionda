@@ -44,12 +44,12 @@ for entry in "${MODELS[@]}"; do
         echo "[NGL = $ngl]"
         echo "----------------------------------------------------------"
         echo ">> VANILLA:"
-        ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS
+        ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS --mmap 1
         echo ">> FIONDA:"
-        ../build/bin/llama-bench -m "$model" -ngl $ngl_fionda -p $PP_TOKENS -n $TG_TOKENS --fionda
+        ../build/bin/llama-bench -m "$model" -ngl $ngl_fionda -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda
         echo ">> FIONDA+EAGLE:"
         if [ "$ngl_eagle" -ge 1 ]; then
-            ../build/bin/llama-bench -m "$model" -ngl $ngl_eagle -p $PP_TOKENS -n $TG_TOKENS --fionda \
+            ../build/bin/llama-bench -m "$model" -ngl $ngl_eagle -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda \
                 -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX
         else
             echo "(skip: ngl_eagle=$ngl_eagle < 1 — budget VRAM insufficiente per il confronto fair)"
