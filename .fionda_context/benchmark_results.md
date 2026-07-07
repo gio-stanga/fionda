@@ -17,9 +17,9 @@
     Vanilla stravince su tg (vanilla 8,56 contro fionda 4,82)
 
 2. sia vanilla che fionda `--mmap 0`
-    Fionda vince su tg (fionda 1094 contro vanilla 854)
-    pareggio su pp (vanilla 4,96 contro fionda 4,84)
+    Fionda vince su pp (fionda 1094 contro vanilla 854)
+    pareggio su tg (vanilla 4,96 contro fionda 4,84)
 
 3. vanilla  `--mmap 1` e fionda `--mmap 0`
-    Vanilla stravince su tg (vanilla 8,57 contro fionda 4,82)
     Fionda stravince su pp (fionda 1093 contro vanilla 705)
+    Vanilla stravince su tg (vanilla 8,57 contro fionda 4,82)
