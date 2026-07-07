@@ -1073,6 +1073,12 @@ common_speculative * common_speculative_init(
         if (is_eagle1) {
             // the draft reads back its own raw layer output as the next-step feature
             params.cparams_dft.embeddings = true;
+
+            // share the target's lm_head with the draft - EAGLE1's head is a copy of the
+            // target's, so sharing avoids the VRAM duplicate (headless draft ggufs require it)
+            if (!llama_model_set_eagle_lm_head(params.model_dft, llama_get_model(ctx_tgt))) {
+                LOG_WRN("%s: could not share the target's lm_head - the draft will use its own copy\n", __func__);
+            }
         }
 
         ctx_dft = llama_init_from_model(params.model_dft, params.cparams_dft);

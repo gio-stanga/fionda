@@ -90,6 +90,9 @@ int main(int argc, char ** argv) {
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
     params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
 
+    // the draft model always lives fully in VRAM - never streamed by fionda
+    params.fionda_mode = false;
+
     auto llama_init_dft = common_init_from_params(params);
 
     model_dft = llama_init_dft->model();

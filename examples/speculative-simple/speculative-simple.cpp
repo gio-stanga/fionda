@@ -64,6 +64,9 @@ int main(int argc, char ** argv) {
         params_dft.model        = params_spec.mparams_dft;
         params_dft.n_gpu_layers = params_spec.n_gpu_layers;
 
+        // the draft model always lives fully in VRAM - never streamed by fionda
+        params_dft.fionda_mode  = false;
+
         if (params_spec.cpuparams.n_threads > 0) {
             params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
             params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
@@ -87,6 +90,11 @@ int main(int argc, char ** argv) {
         char arch_buf[64] = {0};
         llama_model_meta_val_str(model_dft.get(), "general.architecture", arch_buf, sizeof(arch_buf));
         if (strcmp(arch_buf, "eagle") == 0) {
+            if (params_spec.n_gpu_layers >= 0 &&
+                params_spec.n_gpu_layers < llama_model_n_layer(model_dft.get()) + 1) {
+                LOG_WRN("%s: eagle draft model is not fully offloaded (-ngld %d) - it is designed to stay resident in VRAM\n",
+                        __func__, params_spec.n_gpu_layers);
+            }
             llama_set_embeddings(ctx_tgt, true);
         }
     }
