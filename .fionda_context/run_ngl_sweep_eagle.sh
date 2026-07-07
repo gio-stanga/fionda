@@ -14,7 +14,7 @@ DRAFT_MODEL="/media/andrea/Volume3/ubuntu2404/Downloads/eagle1-llama3.1-8b-instr
 DRAFT_MAX=4
 
 # numero di layer fissi sulla GPU
-NGL_VALUES=(4 8 12 16 20 24 28 32)     # llama
+NGL_VALUES=(4 8 12 16 20 24 28 32 36)     # llama
 
 # Parametri Scenario B (PP e TG bilanciati)
 PP_TOKENS=512
