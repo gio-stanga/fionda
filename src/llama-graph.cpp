@@ -355,6 +355,31 @@ void llm_graph_input_eagle_hidden::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_rows = (int64_t) eagle_hid->data.size() / n_embd;
 
+    if (!eagle_hid->seq_ids.empty()) {
+        // row-mapped mode (tree drafting): match each token by (seq_id[0], pos).
+        // n_rows is one tree level (<= ~32) - a linear scan is fine
+        GGML_ASSERT((int64_t) eagle_hid->seq_ids.size() == n_rows);
+
+        for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+            int64_t row = -1;
+            for (int64_t r = 0; r < n_rows; ++r) {
+                if (eagle_hid->seq_ids[r] == ubatch->seq_id[i][0] && eagle_hid->pos[r] == ubatch->pos[i]) {
+                    row = r;
+                    break;
+                }
+            }
+
+            GGML_ASSERT(row >= 0 && "eagle hidden state missing for ubatch (seq, pos)");
+
+            ggml_backend_tensor_set(hidden,
+                    eagle_hid->data.data() + row*n_embd,
+                    (size_t) i*n_embd*sizeof(float),
+                    n_embd*sizeof(float));
+        }
+
+        return;
+    }
+
     // gather rows by absolute sequence position (single-sequence only)
     for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
         const int64_t row = ubatch->pos[i] - eagle_hid->pos_base;

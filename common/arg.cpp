@@ -3441,6 +3441,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MIN"));
     add_opt(common_arg(
+        {"--spec-tree"}, "B0,B1,...",
+        "eagle1 tree drafting: branching factor per depth, e.g. 3,2,2 (1 past the end; depth = --draft-max).\n"
+        "greedy only; empty = chain drafting (default)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.tree_branch.clear();
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.speculative.tree_branch.push_back(std::stoi(item));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
+    add_opt(common_arg(
         {"--draft-p-split"}, "P",
         string_format("speculative decoding split probability (default: %.2f)", (double)params.speculative.p_split),
         [](common_params & params, const std::string & value) {

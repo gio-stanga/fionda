@@ -320,6 +320,10 @@ struct common_params_speculative {
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
 
+    // eagle1 tree drafting: branching factor per depth (e.g. {3,2,2}; 1 past the end).
+    // empty = chain drafting. greedy only. depth is capped by n_max
+    std::vector<int32_t> tree_branch;
+
     // ngram-based speculative decoding
 
     uint16_t ngram_size_n     = 12; // ngram size for lookup

@@ -13,10 +13,16 @@
 #include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <map>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+
+// eagle1 tree drafting: branching factor at a given depth (1 past the end of the list)
+static int32_t tree_branching(const std::vector<int32_t> & branch, int32_t depth) {
+    return depth < (int32_t) branch.size() ? std::max(1, branch[depth]) : 1;
+}
 
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
@@ -145,6 +151,25 @@ struct common_speculative_state {
             llama_tokens & result) = 0;
 
     virtual void accept(uint16_t n_accepted) = 0;
+
+    // tree drafting (optional): false = not supported, caller falls back to draft()
+    virtual bool draft_tree(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            common_speculative_tree & result) {
+        GGML_UNUSED(params);
+        GGML_UNUSED(prompt_tgt);
+        GGML_UNUSED(id_last);
+        GGML_UNUSED(result);
+        return false;
+    }
+
+    // tree verification produces non-contiguous verify-batch rows: rows[k] is the row of
+    // target position (pos of id_last) + k for the accepted path (row 0 = id_last)
+    virtual void accept_rows(const std::vector<int32_t> & rows) {
+        GGML_UNUSED(rows);
+    }
 };
 
 struct common_speculative_state_draft : public common_speculative_state {
@@ -488,6 +513,12 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
 
     std::vector<float> feats;      // staging buffer for features fed to the draft
 
+    // tree verification: verify-batch row of target position pos_base_tgt + k
+    // (set via accept_rows(); empty = identity, i.e. chain verification)
+    std::vector<int32_t> verify_rows;
+
+    llama_batch batch_tree; // tree drafting: one level per decode, multi-seq tokens
+
     common_speculative_state_eagle1(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
@@ -498,7 +529,8 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
         , n_embd (llama_model_n_embd    (llama_get_model(ctx_dft)))
         , n_vocab(llama_vocab_n_tokens  (llama_model_get_vocab(llama_get_model(ctx_dft))))
     {
-        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+        batch      = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+        batch_tree = llama_batch_init(llama_n_batch(ctx_dft), 0, COMMON_SPECULATIVE_TREE_MAX_LEAVES + 1);
     }
 
     ~common_speculative_state_eagle1() override {
@@ -507,6 +539,16 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
         llama_free(ctx_dft);
 
         llama_batch_free(batch);
+        llama_batch_free(batch_tree);
+    }
+
+    // verify-batch row of the target feature for position pos_base_tgt + k
+    int32_t verify_row(int32_t k) const {
+        if (verify_rows.empty()) {
+            return k; // chain verification: rows are contiguous
+        }
+        GGML_ASSERT(k >= 0 && k < (int32_t) verify_rows.size() && "verify row map out of range");
+        return verify_rows[k];
     }
 
     // token of pair j for the current seq = prompt_tgt + [id_last]
@@ -518,6 +560,7 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
         llama_memory_clear(llama_get_memory(ctx_dft), true);
 
         tokens_pair.clear();
+        verify_rows.clear();
         n_verified   = 0;
         pos_base_tgt = 0;
 
@@ -554,17 +597,13 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
         n_verified = n1 - 1;
     }
 
-    void draft(
-            const common_params_speculative & params,
-            const llama_tokens & prompt_tgt,
-            llama_token id_last,
-            llama_tokens & result) override {
-        result.clear();
-
+    // round bookkeeping shared by draft() and draft_tree(): drop last round's speculative
+    // pairs, verify the trunk against the current target sequence, and feed the newly
+    // verified pairs with the true target features of the last target decode.
+    // returns the number of pairs fed (<= 0: nothing new - no fresh logits to draft from).
+    // after this call, the last decoded draft row belongs to the pair of id_last.
+    int32_t reconcile_trunk(const llama_tokens & prompt_tgt, llama_token id_last) {
         const int32_t seq_len = (int32_t) prompt_tgt.size();
-        if (seq_len == 0) {
-            return;
-        }
 
         auto * mem_dft = llama_get_memory(ctx_dft);
 
@@ -590,18 +629,19 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
         }
 
         // feed the newly verified pairs j = n_verified..seq_len-1 with the true target
-        // features from the last target decode (row j - pos_base_tgt)
+        // features from the last target decode (row verify_row(j - pos_base_tgt))
         const int32_t n_new = seq_len - n_verified;
         if (n_new <= 0) {
             // no fresh logits to draft from - should not happen in the normal flow
             LOG_DBG("%s: no new verified pairs (seq_len = %d, n_verified = %d)\n", __func__, seq_len, n_verified);
             pos_base_tgt = seq_len;
-            return;
+            verify_rows.clear();
+            return n_new;
         }
 
         feats.resize((size_t) n_new*n_embd);
         for (int32_t j = n_verified; j < seq_len; ++j) {
-            const int32_t row = j - pos_base_tgt;
+            const int32_t row = verify_row(j - pos_base_tgt);
             GGML_ASSERT(row >= 0 && "missing target hidden state for verified pair");
             const float * f = llama_get_embeddings_ith(ctx_tgt, row);
             GGML_ASSERT(f != nullptr && "target context must run with embeddings enabled for eagle1");
@@ -622,6 +662,26 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
 
         // the upcoming verify decode starts with id_last at target position seq_len
         pos_base_tgt = seq_len;
+        verify_rows.clear();
+
+        return n_new;
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        result.clear();
+
+        const int32_t seq_len = (int32_t) prompt_tgt.size();
+        if (seq_len == 0) {
+            return;
+        }
+
+        if (reconcile_trunk(prompt_tgt, id_last) <= 0) {
+            return;
+        }
 
         // autoregressive draft loop (greedy chain)
         feats.resize(n_embd);
@@ -679,6 +739,166 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
     void accept(uint16_t n_accepted) override {
         // noop - draft() reconciles from prompt_tgt growth (accept is not called by all callers)
         GGML_UNUSED(n_accepted);
+    }
+
+    void accept_rows(const std::vector<int32_t> & rows) override {
+        verify_rows = rows;
+    }
+
+    bool draft_tree(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            common_speculative_tree & result) override {
+        result.nodes.clear();
+        result.n_leaf_seqs = 0;
+
+        if (params.tree_branch.empty()) {
+            return false;
+        }
+
+        const int32_t seq_len = (int32_t) prompt_tgt.size();
+        if (seq_len == 0) {
+            return false;
+        }
+
+        int32_t n_leaves = 1;
+        for (int32_t b : params.tree_branch) {
+            n_leaves *= std::max(1, b);
+        }
+        if (n_leaves < 1 || n_leaves > COMMON_SPECULATIVE_TREE_MAX_LEAVES) {
+            return false;
+        }
+
+        auto * mem_dft = llama_get_memory(ctx_dft);
+
+        // drop last round's tree cells (they live in leaf seqs 1..n_leaves)
+        llama_memory_seq_keep(mem_dft, 0);
+
+        const int32_t n_new = reconcile_trunk(prompt_tgt, id_last);
+        if (n_new <= 0) {
+            return false;
+        }
+
+        // mirror the trunk to the leaf seqs (all cells are seq-0-only after seq_keep above)
+        for (llama_seq_id s = 1; s <= n_leaves; ++s) {
+            llama_memory_seq_cp(mem_dft, 0, s, -1, -1);
+        }
+
+        // the last reconcile row is the pair of id_last: its logits rank the depth-0
+        // candidates and its raw layer output is their input feature
+        struct frontier_item {
+            int32_t      node;    // index into result.nodes; -1 = root (id_last)
+            int32_t      row;     // row in the last draft decode (logits + feature)
+            llama_seq_id leaf_lo; // leaf seq range assigned to this subtree
+            llama_seq_id leaf_hi;
+        };
+
+        std::vector<frontier_item> frontier = { { -1, n_new - 1, 1, n_leaves } };
+        std::vector<frontier_item> children;
+
+        std::vector<float>        tree_feats;
+        std::vector<llama_seq_id> map_seq;
+        std::vector<llama_pos>    map_pos;
+        std::vector<llama_seq_id> seqs;
+
+        const int32_t depth_max = std::max(1, params.n_max);
+
+        for (int32_t d = 0; d < depth_max; ++d) {
+            children.clear();
+            tree_feats.clear();
+            map_seq.clear();
+            map_pos.clear();
+
+            const llama_pos pos = seq_len + d;
+
+            for (const auto & f : frontier) {
+                // clamp the branching to the leaf budget of this subtree
+                const int32_t k = std::min(tree_branching(params.tree_branch, d), f.leaf_hi - f.leaf_lo + 1);
+
+                const float * logits = llama_get_logits_ith(ctx_dft, f.row);
+
+                // top-k tokens by logit (k is tiny - repeated argmax is fine)
+                int32_t top[COMMON_SPECULATIVE_TREE_MAX_LEAVES];
+                for (int32_t c = 0; c < k; ++c) {
+                    int32_t best   = -1;
+                    float   l_best = -std::numeric_limits<float>::infinity();
+                    for (int32_t t = 0; t < n_vocab; ++t) {
+                        bool taken = false;
+                        for (int32_t p = 0; p < c; ++p) {
+                            if (top[p] == t) {
+                                taken = true;
+                                break;
+                            }
+                        }
+                        if (!taken && logits[t] > l_best) {
+                            l_best = logits[t];
+                            best   = t;
+                        }
+                    }
+                    top[c] = best;
+                }
+
+                // input feature of all children = this node's raw layer output
+                // (copy now - invalidated by the next decode)
+                const float * feat = llama_get_embeddings_ith(ctx_dft, f.row);
+                GGML_ASSERT(feat != nullptr);
+
+                // split the leaf range among the children (wider ranges first)
+                const int32_t range   = f.leaf_hi - f.leaf_lo + 1;
+                llama_seq_id  next_lo = f.leaf_lo;
+
+                for (int32_t c = 0; c < k; ++c) {
+                    const int32_t sz = range/k + (c < range % k ? 1 : 0);
+
+                    const llama_seq_id lo = next_lo;
+                    const llama_seq_id hi = next_lo + sz - 1;
+                    next_lo = hi + 1;
+
+                    common_speculative_tree_node node;
+                    node.token     = top[c];
+                    node.parent    = f.node;
+                    node.depth     = d;
+                    node.seq_first = lo;
+                    for (llama_seq_id s = lo; s <= hi; ++s) {
+                        node.seqs.push_back(s);
+                    }
+
+                    result.nodes.push_back(std::move(node));
+
+                    children.push_back({ (int32_t) result.nodes.size() - 1, (int32_t) children.size(), lo, hi });
+
+                    tree_feats.insert(tree_feats.end(), feat, feat + n_embd);
+                    map_seq.push_back(lo);
+                    map_pos.push_back(pos);
+                }
+            }
+
+            if (children.empty()) {
+                break;
+            }
+
+            // decode the whole level in one batch; each child reads its parent's feature
+            // through the (seq, pos) row map
+            llama_set_eagle_hidden_rows(ctx_dft, tree_feats.data(), (int32_t) children.size(), map_seq.data(), map_pos.data());
+
+            common_batch_clear(batch_tree);
+            for (const auto & c : children) {
+                seqs.clear();
+                for (llama_seq_id s = c.leaf_lo; s <= c.leaf_hi; ++s) {
+                    seqs.push_back(s);
+                }
+                common_batch_add(batch_tree, result.nodes[c.node].token, pos, seqs, true);
+            }
+
+            llama_decode(ctx_dft, batch_tree);
+
+            frontier = children;
+        }
+
+        result.n_leaf_seqs = n_leaves;
+
+        return !result.nodes.empty();
     }
 };
 
@@ -1079,6 +1299,31 @@ common_speculative * common_speculative_init(
             if (!llama_model_set_eagle_lm_head(params.model_dft, llama_get_model(ctx_tgt))) {
                 LOG_WRN("%s: could not share the target's lm_head - the draft will use its own copy\n", __func__);
             }
+
+            // tree drafting: validate the topology and force a unified KV cache on the
+            // draft (multi-seq-id tokens require the simple batch split)
+            if (!params.tree_branch.empty()) {
+                int64_t n_leaves = 1;
+                int64_t n_nodes  = 0;
+                int64_t level    = 1;
+                for (int32_t d = 0; d < std::max(1, params.n_max); ++d) {
+                    level   *= tree_branching(params.tree_branch, d);
+                    n_nodes += level;
+                }
+                n_leaves = level;
+
+                if (n_leaves > COMMON_SPECULATIVE_TREE_MAX_LEAVES || n_nodes + 1 > llama_n_batch(ctx_tgt)) {
+                    LOG_WRN("%s: invalid tree topology (%lld leaves, %lld nodes) - falling back to chain drafting\n",
+                            __func__, (long long) n_leaves, (long long) n_nodes);
+                    params.tree_branch.clear();
+                } else {
+                    if (n_nodes + 1 >= 32) {
+                        LOG_WRN("%s: tree verify batch (%lld tokens) reaches the fionda/op-offload batch gate (32) - "
+                                "generation batches will engage the large-batch path\n", __func__, (long long) (n_nodes + 1));
+                    }
+                    params.cparams_dft.kv_unified = true;
+                }
+            }
         }
 
         ctx_dft = llama_init_from_model(params.model_dft, params.cparams_dft);
@@ -1294,6 +1539,131 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
         impl->accept(n_accepted);
         impl->n_call_accept++;
     }
+}
+
+common_speculative_tree common_speculative_draft_tree(
+        common_speculative * spec,
+        const common_params_speculative & params,
+        const llama_tokens & prompt_tgt,
+        llama_token id_last) {
+    common_speculative_tree result;
+
+    spec->curr_impl = nullptr; // reset current implementation
+
+    for (auto & impl : spec->impls) {
+        bool ok = false;
+        {
+            common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
+            ok = impl->draft_tree(params, prompt_tgt, id_last, result);
+            impl->n_call_draft++;
+        }
+
+        if (ok && !result.empty()) {
+            LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                    common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
+                    impl.get()->n_call_draft, result.nodes.size());
+
+            spec->curr_impl = impl.get(); // set current implementation for stats
+            impl->n_gen_drafts++;
+            impl->n_gen_tokens += result.nodes.size();
+
+            break;
+        }
+    }
+
+    return result;
+}
+
+void common_speculative_tree_prepare_batch(
+        llama_context * ctx_tgt,
+        const common_speculative_tree & tree,
+        llama_token id_last,
+        llama_pos n_past,
+        llama_batch & batch_tgt) {
+    auto * mem_tgt = llama_get_memory(ctx_tgt);
+
+    // the trunk must be visible to every leaf seq (normalize first - seq_cp asserts
+    // that the destination seq is not already present)
+    llama_memory_seq_keep(mem_tgt, 0);
+    for (llama_seq_id s = 1; s <= tree.n_leaf_seqs; ++s) {
+        llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
+    }
+
+    std::vector<llama_seq_id> all_seqs(tree.n_leaf_seqs + 1);
+    for (llama_seq_id s = 0; s <= tree.n_leaf_seqs; ++s) {
+        all_seqs[s] = s;
+    }
+
+    common_batch_clear(batch_tgt);
+    common_batch_add(batch_tgt, id_last, n_past, all_seqs, true);
+
+    for (const auto & node : tree.nodes) {
+        common_batch_add(batch_tgt, node.token, n_past + 1 + node.depth, node.seqs, true);
+    }
+}
+
+llama_tokens common_speculative_accept_tree(
+        common_speculative * spec,
+        common_sampler * smpl,
+        llama_context * ctx_tgt,
+        const common_speculative_tree & tree,
+        llama_pos n_past) {
+    llama_tokens ids;
+
+    // greedy walk: sample at the current node, descend into the matching child
+    std::vector<int32_t> path_rows = { 0 }; // verify-batch rows of the accepted path
+
+    int32_t cur = -1; // -1 = root (id_last, row 0)
+    int32_t row = 0;
+
+    for (;;) {
+        const llama_token id = common_sampler_sample(smpl, ctx_tgt, row);
+        common_sampler_accept(smpl, id, true);
+
+        ids.push_back(id);
+
+        int32_t next = -1;
+        for (int32_t i = 0; i < (int32_t) tree.nodes.size(); ++i) {
+            if (tree.nodes[i].parent == cur && tree.nodes[i].token == id) {
+                next = i;
+                break;
+            }
+        }
+
+        if (next < 0) {
+            break;
+        }
+
+        cur = next;
+        row = next + 1;
+
+        path_rows.push_back(row);
+    }
+
+    const int32_t k = (int32_t) ids.size() - 1; // accepted draft tokens (last id = bonus)
+
+    const llama_seq_id s_acc = k > 0 ? tree.nodes[cur].seq_first : 0;
+
+    // the eagle1 state reads the accepted positions' features by these rows next round
+    if (spec->curr_impl) {
+        spec->curr_impl->accept_rows(path_rows);
+    }
+
+    // target KV cleanup: keep the accepted path, move it to seq 0, drop everything else.
+    // every ancestor of the deepest accepted node carries s_acc (its seq set covers the
+    // leaves of its subtree); the rejected sibling branches do not.
+    auto * mem_tgt = llama_get_memory(ctx_tgt);
+
+    llama_memory_seq_keep(mem_tgt, s_acc);
+    llama_memory_seq_rm(mem_tgt, s_acc, n_past + 1 + k, -1);
+    if (s_acc != 0) {
+        llama_memory_seq_cp(mem_tgt, s_acc, 0, -1, -1);
+    }
+    llama_memory_seq_keep(mem_tgt, 0);
+
+    common_speculative_accept(spec, k); // stats only (eagle1 accept() is a noop)
+
+    return ids;
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {

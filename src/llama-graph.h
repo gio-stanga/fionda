@@ -73,11 +73,19 @@ struct llama_cross {
 };
 
 // EAGLE1 draft model: per-position hidden states from the target model, fed as an extra
-// graph input alongside the token embeddings. rows are addressed by absolute sequence
-// position (single-sequence only). set via llama_set_eagle_hidden().
+// graph input alongside the token embeddings. two addressing modes:
+//   - positional (chain drafting): rows addressed by absolute sequence position
+//     (single-sequence only), set via llama_set_eagle_hidden()
+//   - row-mapped (tree drafting): row i belongs to the ubatch token with
+//     (seq_id[0], pos) == (seq_ids[i], pos[i]); selected when seq_ids is non-empty,
+//     set via llama_set_eagle_hidden_rows()
 struct llama_eagle_hidden {
     int64_t   n_embd   = 0;
-    llama_pos pos_base = 0; // sequence position of row 0
+    llama_pos pos_base = 0; // positional mode: sequence position of row 0
+
+    // row-mapped mode keys, [n_rows] each (empty = positional mode)
+    std::vector<llama_seq_id> seq_ids;
+    std::vector<llama_pos>    pos;
 
     // hidden states data copied to host memory, [n_embd, n_rows]
     std::vector<float> data;

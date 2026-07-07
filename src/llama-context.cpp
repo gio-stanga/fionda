@@ -1073,8 +1073,25 @@ void llama_context::set_eagle_hidden(const float * data, int32_t n_tokens, llama
     eagle_hid.n_embd   = n_embd;
     eagle_hid.pos_base = pos_base;
 
+    // positional mode - clear any row map from a previous tree-drafting call
+    eagle_hid.seq_ids.clear();
+    eagle_hid.pos.clear();
+
     eagle_hid.data.resize((size_t) n_tokens*n_embd);
     memcpy(eagle_hid.data.data(), data, (size_t) n_tokens*n_embd*sizeof(float));
+}
+
+void llama_context::set_eagle_hidden_rows(const float * data, int32_t n_rows, const llama_seq_id * seq_ids, const llama_pos * pos) {
+    const int64_t n_embd = model.hparams.n_embd;
+
+    eagle_hid.n_embd   = n_embd;
+    eagle_hid.pos_base = 0;
+
+    eagle_hid.seq_ids.assign(seq_ids, seq_ids + n_rows);
+    eagle_hid.pos.assign(pos, pos + n_rows);
+
+    eagle_hid.data.resize((size_t) n_rows*n_embd);
+    memcpy(eagle_hid.data.data(), data, (size_t) n_rows*n_embd*sizeof(float));
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -3107,6 +3124,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
 
 void llama_set_eagle_hidden(llama_context * ctx, const float * data, int32_t n_tokens, llama_pos pos_base) {
     ctx->set_eagle_hidden(data, n_tokens, pos_base);
+}
+
+void llama_set_eagle_hidden_rows(llama_context * ctx, const float * data, int32_t n_rows, const llama_seq_id * seq_ids, const llama_pos * pos) {
+    ctx->set_eagle_hidden_rows(data, n_rows, seq_ids, pos);
 }
 
 void llama_set_embeddings(llama_context * ctx, bool embeddings) {

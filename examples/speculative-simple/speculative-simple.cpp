@@ -32,6 +32,16 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // eagle1 tree drafting: greedy only; multi-seq verification needs a unified KV cache
+    if (!params.speculative.tree_branch.empty()) {
+        if (params.sampling.temp > 0.0f) {
+            LOG_WRN("%s: tree drafting (--spec-tree) is greedy-only - falling back to chain drafting\n", __func__);
+            params.speculative.tree_branch.clear();
+        } else {
+            params.kv_unified = true;
+        }
+    }
+
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -156,7 +166,14 @@ int main(int argc, char ** argv) {
 
     common_speculative_begin(spec, prompt_tgt);
 
-    llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+    // tree verification couples tokens to up to 1 + n_leaves sequences
+    int32_t n_tree_leaves = 1;
+    for (int32_t b : params_spec.tree_branch) {
+        n_tree_leaves *= std::max(1, b);
+    }
+
+    llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0,
+            params_spec.tree_branch.empty() ? 1 : n_tree_leaves + 1);
 
     const auto t_enc_end = ggml_time_us();
 
@@ -170,6 +187,31 @@ int main(int argc, char ** argv) {
         // offloaded to a remote device. it doesn't even have to be based on an LLM. instead, it can provide tokens
         // from a cache or lookup tables.
         //
+        llama_tokens ids;
+
+        size_t n_drafted_round = 0;
+
+        common_speculative_tree tree;
+        if (!params_spec.tree_branch.empty()) {
+            tree = common_speculative_draft_tree(spec, params_spec, prompt_tgt, id_last);
+        }
+
+        if (!tree.empty()) {
+            // tree path: verify all branches in one target pass; acceptance walks the tree
+            // and cleans the target KV (no manual seq_rm needed)
+            common_speculative_tree_prepare_batch(ctx_tgt, tree, id_last, n_past, batch_tgt);
+
+            llama_decode(ctx_tgt, batch_tgt);
+
+            ids = common_speculative_accept_tree(spec, smpl, ctx_tgt, tree, n_past);
+
+            GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
+
+            n_past += ids.size();
+
+            n_drafted_round = tree.nodes.size();
+        } else {
+
         llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
 
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
@@ -201,14 +243,19 @@ int main(int argc, char ** argv) {
         // available logits from the batch and sample the next token until we run out of logits or the sampler
         // disagrees with the draft
         //
-        const auto ids = common_sampler_sample_and_accept_n(smpl, ctx_tgt, draft);
+        ids = common_sampler_sample_and_accept_n(smpl, ctx_tgt, draft);
 
         //LOG_DBG("ids: %s\n", string_from(ctx_tgt, ids).c_str());
 
         GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
 
-        n_past    += ids.size() - 1;
-        n_drafted += draft.size(); // note: we ignore the discarded small drafts
+        n_past += ids.size() - 1;
+
+        n_drafted_round = draft.size(); // note: we ignore the discarded small drafts
+
+        } // chain path
+
+        n_drafted += n_drafted_round;
         n_accept  += ids.size() - 1;
         n_predict += ids.size();
 
@@ -236,7 +283,7 @@ int main(int argc, char ** argv) {
             }
         }
 
-        LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) draft.size(), id_last);
+        LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) n_drafted_round, id_last);
 
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);

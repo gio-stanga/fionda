@@ -985,6 +985,16 @@ extern "C" {
                          int32_t   n_tokens,
                        llama_pos   pos_base);
 
+    // EAGLE1 draft models, tree drafting: set hidden states with an explicit row map.
+    // row i is fed to the batch token whose (seq_id[0], pos) equals (seq_ids[i], pos[i]).
+    // valid for subsequent decodes until replaced by either setter.
+    LLAMA_API void llama_set_eagle_hidden_rows(
+            struct llama_context * ctx,
+                     const float * data,
+                         int32_t   n_rows,
+            const llama_seq_id   * seq_ids,
+            const llama_pos      * pos);
+
     // EAGLE1 draft models: share the target model's lm_head tensor with the draft model
     // instead of the draft's own copy (the draft gguf may omit its output tensor entirely).
     // call before creating the draft context. the target model must outlive the draft model.

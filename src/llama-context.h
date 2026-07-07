@@ -106,6 +106,9 @@ struct llama_context {
 
     // EAGLE1 draft: set per-position hidden states for subsequent decodes
     void set_eagle_hidden(const float * data, int32_t n_tokens, llama_pos pos_base);
+
+    // EAGLE1 draft (tree drafting): set hidden states with an explicit (seq, pos) -> row map
+    void set_eagle_hidden_rows(const float * data, int32_t n_rows, const llama_seq_id * seq_ids, const llama_pos * pos);
     void set_warmup(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);

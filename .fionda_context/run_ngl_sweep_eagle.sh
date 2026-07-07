@@ -12,6 +12,9 @@ MODELS=(
 # draft EAGLE1 (residente in VRAM, mai streamato; senza lm_head - condivisa col target)
 DRAFT_MODEL="/media/andrea/Volume3/ubuntu2404/Downloads/eagle1-llama3.1-8b-instruct-nohead-q4_k_m.gguf"
 DRAFT_MAX=4
+# --spec-tree ",2x2" = catena + albero 2x2 nella stessa run (stesso budget VRAM; l'albero non
+# costa pesi). Non aggiungere 3x2x2 qui: con DRAFT_MAX=4 fa 33 nodi -> batch 34 > 31 (gate
+# fionda/op-offload); tenerlo per lo sweep di follow-up al miglior NGL con --draft-max 3.
 
 # numero di layer fissi sulla GPU
 NGL_VALUES=(4 8 12 16 20 24 28 32 36)     # llama
@@ -51,7 +54,7 @@ for entry in "${MODELS[@]}"; do
         echo ">> FIONDA+EAGLE:"
         if [ "$ngl_eagle" -ge 1 ]; then
             ../build/bin/llama-bench -m "$model" -ngl $ngl_eagle -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda \
-                -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX
+                -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX --spec-tree ,2x2
         else
             echo "(skip: ngl_eagle=$ngl_eagle < 1 — budget VRAM insufficiente per il confronto fair)"
         fi
