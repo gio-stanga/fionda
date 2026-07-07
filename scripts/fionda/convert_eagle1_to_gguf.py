@@ -3,8 +3,10 @@
 #
 # The EAGLE1 checkpoint contains only: embed_tokens, fc, layers.0.* (no input_layernorm,
 # no final norm, no lm_head). The lm_head is the base model's, applied to the raw layer
-# output - so it is raw-copied (same quantized bytes) from the base model GGUF, together
-# with all tokenizer metadata. The result loads in llama.cpp as architecture "eagle".
+# output - by default it is NOT embedded: at runtime the target's lm_head tensor is shared
+# with the draft (llama_set_eagle_lm_head), avoiding a ~400 MB VRAM duplicate. Tokenizer
+# metadata is copied from the base GGUF. The result loads in llama.cpp as architecture
+# "eagle". Use --keep-lm-head to embed a raw copy (standalone-loadable draft).
 #
 # Usage:
 #   python scripts/fionda/convert_eagle1_to_gguf.py \
@@ -43,6 +45,9 @@ def main() -> None:
     parser.add_argument("--base-gguf", type=Path, required=True, help="base (target) model GGUF - source of lm_head and tokenizer")
     parser.add_argument("--outfile",   type=Path, required=True)
     parser.add_argument("--outtype",   choices=["f16", "f32"], default="f16")
+    parser.add_argument("--keep-lm-head", action="store_true",
+                        help="embed a copy of the base model's lm_head (default: omit it - at runtime "
+                             "the target's lm_head is shared via llama_set_eagle_lm_head, saving its VRAM)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -135,11 +140,16 @@ def main() -> None:
         logger.info("writing %-28s %s %s", name, data.shape, data.dtype)
         writer.add_tensor(name, data)
 
-    # lm_head: raw copy from the base model (same quantization)
-    output_w = next((t for t in reader.tensors if t.name == "output.weight"), None)
-    assert output_w is not None, "base GGUF has no output.weight (tied embeddings?) - not supported"
-    logger.info("writing %-28s %s %s (raw copy from base)", output_w.name, output_w.shape, output_w.tensor_type.name)
-    writer.add_tensor(output_w.name, output_w.data, raw_shape=output_w.data.shape, raw_dtype=output_w.tensor_type)
+    # lm_head: by default omitted - the runtime shares the target's own tensor
+    # (llama_set_eagle_lm_head). --keep-lm-head embeds a raw copy from the base model
+    # (same quantization) for drafts that must load standalone.
+    if args.keep_lm_head:
+        output_w = next((t for t in reader.tensors if t.name == "output.weight"), None)
+        assert output_w is not None, "base GGUF has no output.weight (tied embeddings?) - not supported"
+        logger.info("writing %-28s %s %s (raw copy from base)", output_w.name, output_w.shape, output_w.tensor_type.name)
+        writer.add_tensor(output_w.name, output_w.data, raw_shape=output_w.data.shape, raw_dtype=output_w.tensor_type)
+    else:
+        logger.info("omitting lm_head - the target's lm_head is shared at runtime")
 
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
