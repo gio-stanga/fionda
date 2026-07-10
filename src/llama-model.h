@@ -571,6 +571,10 @@ struct llama_model {
     // untouched for the caller to assign. returns false when fionda is not initialized.
     bool get_fionda_state(struct ggml_backend_fionda_params & params) const;
 
+    // returns fionda profiling data: avg compute ms, avg DMA ms, latency hiding %.
+    // returns false when fionda is not initialized or no profiling data is available.
+    bool get_fionda_profile(float & avg_compute_ms, float & avg_dma_ms, float & hide_pct) const;
+
     void load_stats  (llama_model_loader & ml);
     void load_arch   (llama_model_loader & ml);
     void load_hparams(llama_model_loader & ml);

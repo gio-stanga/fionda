@@ -622,6 +622,14 @@ extern "C" {
     // Returns the total number of parameters in the model
     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
 
+    // Fionda profiling: returns average compute/DMA times per block and latency hiding %.
+    // Returns false when fionda is not active or no profiling data is available.
+    LLAMA_API bool llama_model_get_fionda_profile(
+            const struct llama_model * model,
+            float * avg_compute_ms,
+            float * avg_dma_ms,
+            float * hide_pct);
+
     // Returns true if the model contains an encoder that requires llama_encode() call
     LLAMA_API bool llama_model_has_encoder(const struct llama_model * model);
 

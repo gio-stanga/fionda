@@ -324,6 +324,13 @@ extern "C" {
         ggml_fionda_compute_wait_event_t   compute_wait_event_cb;   // make the backend compute stream wait on event
         ggml_fionda_compute_event_record_t compute_event_record_cb; // record event on the backend compute stream
         ggml_fionda_stream_wait_event_t    stream_wait_event_cb;    // make a given stream wait on event
+
+        // Profiling state
+        void * profile_dma_start[128];
+        void * profile_dma_end[128];
+        void * profile_compute_start[128];
+        void * profile_compute_end[128];
+        int *  profile_block_cnt;
     };
 
     GGML_API void ggml_backend_sched_set_fionda(
