@@ -11,9 +11,9 @@ MODELS=(
 )
 
 # numero di layer fissi sulla GPU
-NGL_VALUES=(4 8 12 16 20 24 28 32)     # llama
-#NGL_VALUES=(6 12 18 24 30 36 42 48)    # gemma
-#NGL_VALUES=(5 10 15 20 25 30 35 40)    # qwen
+NGL_VALUES=(4 8 12 16 20 24 28 32 36)     # llama
+#NGL_VALUES=(6 12 18 24 30 36 42 48 54)    # gemma
+#NGL_VALUES=(5 10 15 20 25 30 35 40 45)    # qwen
 
 # Parametri Scenario B (PP e TG bilanciati)
 PP_TOKENS=512
@@ -39,7 +39,7 @@ for model in "${MODELS[@]}"; do
         echo "[NGL = $ngl]"
         echo "----------------------------------------------------------"
         echo ">> VANILLA:"
-        ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS --mmap 1
+        ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS --mmap 0
         echo ">> FIONDA:"
         ../build/bin/llama-bench -m "$model" -ngl $ngl_fionda -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda
         echo "----------------------------------------------------------"

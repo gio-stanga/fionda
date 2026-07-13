@@ -10,16 +10,30 @@
 
 ---
 
-## Note risultati (ngl 12,5%, no speculative)
+## OS Configuration
+Comandi eseguiti prima di lanciare i test:
+```bash
+# Imposta tutti i core su "performance" (richiede sudo)
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-1. sia vanilla che fionda `--mmap 1`
-    pareggio su pp (vanilla 702 contro fionda 691)
-    Vanilla stravince su tg (vanilla 8,56 contro fionda 4,82)
+# Abilita il persistence mode sulla GPU
+sudo nvidia-smi -pm 1
 
-2. sia vanilla che fionda `--mmap 0`
-    Fionda vince su pp (fionda 1094 contro vanilla 854)
-    pareggio su tg (vanilla 4,96 contro fionda 4,84)
+# Ferma aggiornamenti automatici e indicizzazione
+sudo systemctl stop unattended-upgrades
+systemctl --user stop tracker-extract-3 tracker-miner-fs-3
+```
 
-3. vanilla  `--mmap 1` e fionda `--mmap 0`
-    Fionda stravince su pp (fionda 1093 contro vanilla 705)
-    Vanilla stravince su tg (vanilla 8,57 contro fionda 4,82)
+---
+
+## Test mmap con Llama 3.1 (ngl 12,5%, no speculative)
+
+1. Vanilla `--mmap 0` vs `--mmap 1` 
+    pp passa da 900 t/s a 800 t/s
+    tg rimane costante a 9,54 t/s
+
+2. Fionda `--mmap 0` vs `--mmap 1` 
+    pp passa da 1130 t/s a 850 t/s
+    tg rimane costante a 9,20 t/s
+
+=> meglio settare `--mmap 0` su entrambi
