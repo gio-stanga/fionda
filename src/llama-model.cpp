@@ -335,6 +335,13 @@ struct llama_model::impl {
         void *       slot_consumed[2] = {};      // cudaEvent_t: the split reading slot N was dispatched
         int          cur_slot         = 0;       // slot currently being computed
         bool         initialized      = false;
+        
+        // Profiling state
+        void *       profile_dma_start[128]     = {};
+        void *       profile_dma_end[128]       = {};
+        void *       profile_compute_start[128] = {};
+        void *       profile_compute_end[128]   = {};
+        int          profile_block_cnt          = 0;
     } fionda_vram;
 };
 
@@ -353,6 +360,13 @@ llama_model::~llama_model() {
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_consumed[0]);
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[1]);
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[0]);
+        
+        for (int i = 0; i < 128; i++) {
+            if (pimpl->fionda_vram.profile_dma_start[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_dma_start[i]);
+            if (pimpl->fionda_vram.profile_dma_end[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_dma_end[i]);
+            if (pimpl->fionda_vram.profile_compute_start[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_compute_start[i]);
+            if (pimpl->fionda_vram.profile_compute_end[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_compute_end[i]);
+        }
         ggml_backend_cuda_fionda_stream_destroy(pimpl->fionda_vram.transfer_stream);
         ggml_backend_cuda_fionda_vram_free(pimpl->fionda_vram.cuda_buf);
 #endif
@@ -372,7 +386,74 @@ bool llama_model::get_fionda_state(struct ggml_backend_fionda_params & params) c
     params.slot_ready[1]    = fv.slot_ready[1];
     params.slot_consumed[0] = fv.slot_consumed[0];
     params.slot_consumed[1] = fv.slot_consumed[1];
+
+    for (int i = 0; i < 128; i++) {
+        params.profile_dma_start[i]     = fv.profile_dma_start[i];
+        params.profile_dma_end[i]       = fv.profile_dma_end[i];
+        params.profile_compute_start[i] = fv.profile_compute_start[i];
+        params.profile_compute_end[i]   = fv.profile_compute_end[i];
+    }
+    *((int*)&fv.profile_block_cnt) = 0;
+    params.profile_block_cnt = (int*)&fv.profile_block_cnt;
+    
     return true;
+}
+
+bool llama_model::get_fionda_profile(float & avg_compute_ms, float & avg_dma_ms, float & hide_pct) const {
+#ifdef GGML_USE_CUDA
+    const auto & fv = pimpl->fionda_vram;
+    if (!fv.initialized) {
+        LLAMA_LOG_INFO("%s: fv.initialized is false\n", __func__);
+        return false;
+    }
+    if (fv.profile_block_cnt <= 0) {
+        LLAMA_LOG_INFO("%s: fv.profile_block_cnt <= 0 (%d)\n", __func__, fv.profile_block_cnt);
+        return false;
+    }
+
+    // Synchronize to ensure all events have been recorded
+    ggml_backend_cuda_fionda_synchronize_device();
+
+    float total_compute = 0.0f;
+    float total_dma     = 0.0f;
+    int   valid_blocks  = 0;
+
+    for (int i = 0; i < fv.profile_block_cnt; i++) {
+        float comp_ms = ggml_backend_cuda_fionda_event_elapsed_ms(
+            fv.profile_compute_start[i], fv.profile_compute_end[i]);
+        float dma_ms  = ggml_backend_cuda_fionda_event_elapsed_ms(
+            fv.profile_dma_start[i], fv.profile_dma_end[i]);
+
+        if (comp_ms >= 0.0f && dma_ms >= 0.0f) {
+            total_compute += comp_ms;
+            total_dma     += dma_ms;
+            valid_blocks++;
+        } else {
+            LLAMA_LOG_INFO("%s: invalid event elapsed time for block %d: comp_ms=%f, dma_ms=%f\n", __func__, i, comp_ms, dma_ms);
+        }
+    }
+
+    if (valid_blocks == 0) {
+        LLAMA_LOG_INFO("%s: valid_blocks == 0\n", __func__);
+        return false;
+    }
+
+    avg_compute_ms = total_compute / valid_blocks;
+    avg_dma_ms     = total_dma     / valid_blocks;
+
+    if (avg_dma_ms > 0.0f) {
+        hide_pct = std::min(avg_compute_ms / avg_dma_ms * 100.0f, 100.0f);
+    } else {
+        hide_pct = 100.0f;
+    }
+
+    return true;
+#else
+    (void) avg_compute_ms;
+    (void) avg_dma_ms;
+    (void) hide_pct;
+    return false;
+#endif
 }
 
 void llama_model::load_stats(llama_model_loader & ml) {
@@ -8207,6 +8288,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1]);
             ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[0]);
             ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[1]);
+            
+            for (int i = 0; i < 128; i++) {
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_start[i]);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_end[i]);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_compute_start[i]);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_compute_end[i]);
+            }
 #endif
 
             fv.cur_slot    = 0;
@@ -9620,6 +9708,14 @@ const char * llama_model_chat_template(const llama_model * model, const char * n
 
 uint64_t llama_model_n_params(const llama_model * model) {
     return model->n_elements();
+}
+
+bool llama_model_get_fionda_profile(
+        const llama_model * model,
+        float * avg_compute_ms,
+        float * avg_dma_ms,
+        float * hide_pct) {
+    return model->get_fionda_profile(*avg_compute_ms, *avg_dma_ms, *hide_pct);
 }
 
 bool llama_model_has_encoder(const llama_model * model) {

@@ -1454,8 +1454,13 @@ struct test {
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
-    // speculative (draft model) runs only: actual tokens generated per rep (the last round can
-    // overshoot n_gen by up to draft_max-1 accepted tokens) and draft acceptance totals
+
+    // fionda profiling
+    float                    fionda_avg_compute_ms = -1.0f;
+    float                    fionda_avg_dma_ms     = -1.0f;
+    float                    fionda_hide_pct       = -1.0f;
+    bool                     fionda_profile_valid  = false;
+    // speculative runs only: actual tokens generated per rep and draft acceptance totals
     std::vector<int>         samples_n_tokens;
     uint64_t                 n_drafted  = 0;
     uint64_t                 n_accepted = 0;
@@ -1505,6 +1510,11 @@ struct test {
         test_time = buf;
 
         (void) ctx;
+    }
+
+    void populate_fionda_profile(const llama_model * lmodel) {
+        fionda_profile_valid = llama_model_get_fionda_profile(
+            lmodel, &fionda_avg_compute_ms, &fionda_avg_dma_ms, &fionda_hide_pct);
     }
 
     uint64_t avg_ns() const { return ::avg(samples_ns); }
@@ -2014,6 +2024,13 @@ struct markdown_printer : public printer {
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
+
+        // fionda profiling columns (only when fionda is active)
+        if (params.fionda_mode.size() > 0 && params.fionda_mode != cmd_params_defaults.fionda_mode) {
+            fields.emplace_back("comp_ms");
+            fields.emplace_back("dma_ms");
+            fields.emplace_back("hide%");
+        }
         if (has_draft) {
             fields.emplace_back("accept%");
         }
@@ -2071,6 +2088,27 @@ struct markdown_printer : public printer {
                 value = buf;
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
+                value = buf;
+            } else if (field == "comp_ms") {
+                if (t.fionda_profile_valid) {
+                    snprintf(buf, sizeof(buf), "%.2f", t.fionda_avg_compute_ms);
+                } else {
+                    snprintf(buf, sizeof(buf), "n/a");
+                }
+                value = buf;
+            } else if (field == "dma_ms") {
+                if (t.fionda_profile_valid) {
+                    snprintf(buf, sizeof(buf), "%.2f", t.fionda_avg_dma_ms);
+                } else {
+                    snprintf(buf, sizeof(buf), "n/a");
+                }
+                value = buf;
+            } else if (field == "hide%") {
+                if (t.fionda_profile_valid) {
+                    snprintf(buf, sizeof(buf), "%.1f%%", t.fionda_hide_pct);
+                } else {
+                    snprintf(buf, sizeof(buf), "n/a");
+                }
                 value = buf;
             } else if (field == "accept%") {
                 if (t.n_drafted > 0) {
@@ -2626,6 +2664,8 @@ int main(int argc, char ** argv) {
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
         }
+
+        t.populate_fionda_profile(lmodel);
 
         if (p) {
             p->print_test(t);

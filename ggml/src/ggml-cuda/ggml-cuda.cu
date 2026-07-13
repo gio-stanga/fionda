@@ -5387,4 +5387,28 @@ void ggml_backend_cuda_fionda_stream_wait_event(void * stream, void * event) {
     CUDA_CHECK(cudaStreamWaitEvent(reinterpret_cast<cudaStream_t>(stream), reinterpret_cast<cudaEvent_t>(event), 0));
 }
 
+int ggml_backend_cuda_fionda_event_create_timing(void ** out_event) {
+    cudaError_t err = cudaEventCreate(reinterpret_cast<cudaEvent_t *>(out_event));
+    if (err != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaEventCreate failed: %s\n",
+                __func__, cudaGetErrorString(err));
+    }
+    return (int)err;
+}
+
+float ggml_backend_cuda_fionda_event_elapsed_ms(void * start, void * end) {
+    float ms = 0.0f;
+    cudaError_t err = cudaEventElapsedTime(&ms,
+        reinterpret_cast<cudaEvent_t>(start),
+        reinterpret_cast<cudaEvent_t>(end));
+    if (err != cudaSuccess) {
+        return -1.0f;
+    }
+    return ms;
+}
+
+void ggml_backend_cuda_fionda_synchronize_device(void) {
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)
