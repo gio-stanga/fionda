@@ -4,14 +4,36 @@
 * **OS:** Ubuntu 24.04
 * **CPU:** AMD Ryzen 5 5600G
 * **Motherboard:** ASUS TUF B450 Gaming Plus V2
-* **RAM:** 24GB DDR4
+* **RAM:** 4x8GB DDR4 2666MHz
 * **GPU:** NVIDIA GeForce RTX 3060 Ti (VRAM: 7834 MiB, Compute 8.6)
 * **PCIe:** 3.0 x16
 
 ---
 
-## Note risultati (ngl 25%, con speculative)
+## OS Configuration
+Comandi eseguiti prima di lanciare i test:
+```bash
+# Imposta tutti i core su "performance" (richiede sudo)
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-1. vanilla  `--mmap 1` e fionda `--mmap 0`
-    Fionda vince su pp (fionda 981 contro vanilla 724)
-    Vanilla vince su tg (vanilla 9.68 contro fionda 7,63)
+# Abilita il persistence mode sulla GPU
+sudo nvidia-smi -pm 1
+
+# Ferma aggiornamenti automatici e indicizzazione
+sudo systemctl stop unattended-upgrades
+systemctl --user stop tracker-extract-3 tracker-miner-fs-3
+```
+
+---
+
+## Test mmap con Llama 3.1 (ngl 25%, con speculative)
+
+1. Vanilla `--mmap 0` vs `--mmap 1` 
+    pp passa da 900 t/s a 800 t/s
+    tg rimane costante a 9,54 t/s
+
+2. Fionda `--mmap 0` vs `--mmap 1` 
+    pp passa da 1130 t/s a 850 t/s
+    tg rimane costante a 9,20 t/s
+
+=> meglio settare `--mmap 0` su entrambi
