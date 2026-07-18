@@ -1255,9 +1255,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
-    // fionda is restricted to prompt processing: only batches large enough for the op_offload
-    // path (which is what produces the CPU-weight split inputs fionda streams) activate the
-    // DMA double buffer. token generation keeps the standard scheduling.
+    // fionda scheduler is restricted to prompt processing: only batches large enough for the op_offload
+    // path (which is what produces the CPU-weight split inputs fionda streams) activate the DMA double buffer
+    // token generation keeps the standard scheduling
     {
         static const uint32_t fionda_min_batch = [] {
             const char * env = getenv("GGML_OP_OFFLOAD_MIN_BATCH");

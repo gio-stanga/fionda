@@ -336,7 +336,7 @@ struct llama_model::impl {
         int          cur_slot         = 0;       // slot currently being computed
         bool         initialized      = false;
         
-        // Profiling state
+        // profiling state
         void *       profile_dma_start[128]     = {};
         void *       profile_dma_end[128]       = {};
         void *       profile_compute_start[128] = {};
@@ -411,7 +411,7 @@ bool llama_model::get_fionda_profile(float & avg_compute_ms, float & avg_dma_ms,
         return false;
     }
 
-    // Synchronize to ensure all events have been recorded
+    // synchronize to ensure all events have been recorded
     ggml_backend_cuda_fionda_synchronize_device();
 
     float total_compute = 0.0f;
@@ -8231,7 +8231,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 #ifdef GGML_USE_CUDA
         err = ggml_backend_cuda_fionda_vram_alloc(&cuda_buf, 2 * slot_size, cuda_device);
 #else
-        err = -1; // Fail if not compiled with CUDA
+        err = -1; // fail if not compiled with CUDA
 #endif
         if (err != 0 || !cuda_buf) {
             LLAMA_LOG_WARN("%s: fionda: VRAM double buffer allocation failed (err=%d), "

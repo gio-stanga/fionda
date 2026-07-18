@@ -317,7 +317,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
-        bool fionda_mode;     // Fionda Scheduler: enable dynamic loading optimizations
+        bool fionda_mode;     // enable Fionda dynamic scheduler
     };
 
     struct llama_sampler_seq_config {
@@ -622,8 +622,8 @@ extern "C" {
     // Returns the total number of parameters in the model
     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
 
-    // Fionda profiling: returns average compute/DMA times per block and latency hiding %.
-    // Returns false when fionda is not active or no profiling data is available.
+    // Fionda profiling: returns average compute/DMA times per block and latency hiding %
+    // Returns false when fionda is not active or no profiling data is available
     LLAMA_API bool llama_model_get_fionda_profile(
             const struct llama_model * model,
             float * avg_compute_ms,
