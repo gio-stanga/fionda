@@ -29,11 +29,11 @@ systemctl --user stop tracker-extract-3 tracker-miner-fs-3
 ## Test mmap con Llama 3.1 (ngl 12,5%, no speculative)
 
 1. Vanilla `--mmap 0` vs `--mmap 1` 
-    pp passa da 900 t/s a 800 t/s
-    tg rimane costante a 9,54 t/s
+    - pp passa da 900 t/s a 800 t/s
+    - tg rimane costante a 9,54 t/s
 
 2. Fionda `--mmap 0` vs `--mmap 1` 
-    pp passa da 1130 t/s a 850 t/s
-    tg rimane costante a 9,20 t/s
+    - pp passa da 1130 t/s a 850 t/s
+    - tg rimane costante a 9,20 t/s
 
 => meglio settare `--mmap 0` su entrambi
