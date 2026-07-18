@@ -1,4 +1,4 @@
-# Benchmark Results
+# Benchmark Configuration
 
 ## Hardware Configuration
 * **OS:** Ubuntu 24.04
@@ -13,13 +13,13 @@
 ## OS Configuration
 Comandi eseguiti prima di lanciare i test:
 ```bash
-# Imposta tutti i core su "performance" (richiede sudo)
+# imposta tutti i core su performance
 echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-# Abilita il persistence mode sulla GPU
+# abilita il persistence mode sulla GPU
 sudo nvidia-smi -pm 1
 
-# Ferma aggiornamenti automatici e indicizzazione
+# disattiva ricerca aggiornamenti indicizzazione
 sudo systemctl stop unattended-upgrades
 systemctl --user stop tracker-extract-3 tracker-miner-fs-3
 ```

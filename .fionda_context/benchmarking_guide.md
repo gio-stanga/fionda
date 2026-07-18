@@ -1,91 +1,69 @@
-# Fionda: Llama.cpp Benchmarking Guide
+# Fionda Benchmarking Guide
 
-Prima di modificare la codebase di `llama.cpp` per inserire il double buffering, è fondamentale raccogliere le metriche di *baseline*. Questo ci permetterà di dimostrare l'effettivo miglioramento del *memory bottleneck* e del pipelining PCIe.
+## Premessa
 
-Di seguito la procedura per estrarre le metriche richieste sul tuo setup (Ubuntu 24.04, Ryzen 5 5600G, RTX 3060 Ti 8GB).
+Lo scheduler di Fionda ha l'obiettivo di accelerare la fase di prompt processing attraverso la schedulazione dinamica dei layer in VRAM. Inoltre, l'implementazione di Fionda è stata realizzata interamente in CUDA e C++. Assumeremo dunque che l'hardware sul quale viene eseguito è dotato di una scheda video Nvidia con compute capabilities >= 3.7 e CUDA version >= 9.0
 
-## 1. Compilazione Ottimizzata
+---
 
-Per avere metriche affidabili, assicurati di compilare in modalità **Release** e con il supporto CUDA abilitato.
+## 1. Scaricare i modelli
 
+Per scaricare i modelli è necessario visitare https://huggingface.co/ e scaricare in versione `.gguf` i seguenti modelli:
+- [Meta Llama 3.1 8B](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
+- [Gemma 4 12B](https://huggingface.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF)
+- [Qwen 3.6 14B](https://huggingface.co/tvall43/Qwen3.6-14B-A3B-VibeForged-v2-GGUF)
+
+Per ciascuno di questi modelli scaricare le quantizzazioni desiderate. Nei nostri test abbiamo utilizzato le quantizzazioni `Q4_K_M` e `Q8_0`.
+
+---
+
+## 2. Compilazione
+
+Compiliamo il progetto in modalità Release
 ```bash
 mkdir -p build
 cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j 12
 ```
 
-> [!WARNING]
-> Mai eseguire benchmark su build di tipo `Debug`. Le prestazioni crollano drasticamente.
-
----
-
-## 2. Misurare Throughput (Token/s) e Latenza (TTFT)
-
-`llama.cpp` include uno strumento ufficiale molto preciso chiamato `llama-bench`. È il modo migliore per testare diverse configurazioni senza l'overhead dell'interfaccia chat.
-
-**Comando:**
+Per ridurre il rumore dell'OS durante i benchmark, settiamo su performance il profilo energetico di CPU e GPU e disattiviamo la ricerca di aggiornamenti e l'indicizzazione dei files. Su Ubuntu eseguire questi comandi.
 ```bash
-./build/bin/llama-bench -m /percorso/al/modello.gguf -p 512 -n 128 -ngl 99
-```
-*Spiegazione dei parametri:*
-- `-p 512`: Prompt di 512 token (misura la fase di **Prompt Processing**, da cui deriva il TTFT).
-- `-n 128`: Genera 128 token (misura la fase di **Text Generation**, il throughput).
-- `-ngl 99`: Tenta di offloadare tutti i layer sulla GPU (fino a esaurimento VRAM).
+# imposta tutti i core su performance
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-**Cosa leggere nell'output:**
-- **PP (Prompt Processing):** Indica quanti token al secondo vengono processati in fase di pre-fill. Da questo calcoli il **TTFT (Time To First Token)**: $TTFT = \frac{\text{Token del Prompt}}{\text{Throughput PP}}$.
-- **TG (Text Generation):** È il throughput effettivo in **Tokens/s** durante la generazione.
+# abilita il persistence mode sulla GPU
+sudo nvidia-smi -pm 1
+
+# disattiva ricerca aggiornamenti indicizzazione
+sudo systemctl stop unattended-upgrades
+systemctl --user stop tracker-extract-3 tracker-miner-fs-3
+```
 
 ---
 
-## 3. Misurare TFLOPS e Memory Bandwidth (GB/s)
+## 3. Esecuzione manuale dei benchmark
 
-Sebbene `llama.cpp` stampi un report alla fine della generazione tramite `llama-cli`, per ottenere i TFLOPS hardware reali e l'effettivo GB/s sul bus di memoria/PCIe, il gold standard è usare **NVIDIA Nsight Compute (`ncu`)** e **Nsight Systems (`nsys`)**.
-
-### Nsight Systems (nsys)
-Perfetto per visualizzare se il bus PCIe sta limitando la GPU.
+`llama.cpp` include `llama-bench`, uno strumento ufficiale pensato apposta per realizzare benchmark in maniera precisa ed affidabile. È il modo migliore per testare diverse configurazioni senza l'overhead della UI
 ```bash
-nsys profile -t cuda,nvtx,osrt --stats=true \
-  ./build/bin/llama-cli -m /percorso/al/modello.gguf -p "Scrivi una breve poesia:" -n 10 -ngl 99
+./build/bin/llama-bench -m /percorso/al/modello.gguf -p 512 -n 128 -ngl 12 --mmap 0 --fionda
 ```
-Questo genererà un file `.nsys-rep`. Aprendolo nella GUI di *Nsight Systems*, vedrai l'esatta timeline dei trasferimenti `cudaMemcpy` (Host-to-Device) contro le esecuzioni dei kernel. Questo sarà il tuo **riferimento visivo principale** per dimostrare che Fionda ha sovrapposto (pipelined) i trasferimenti!
 
-### Report interno di llama.cpp
-Alla fine dell'esecuzione di `./build/bin/llama-cli`, noterai delle righe come queste:
-```text
-llama_print_timings: prompt eval time =  XXX ms /   512 tokens (  YYY ms per token,  ZZZ tokens per second)
-llama_print_timings:        eval time =  XXX ms /   128 runs   (  YYY ms per token,  ZZZ tokens per second)
-```
-Questo è utile per calcoli rapidi.
+- `-p 512`: prompt di 512 token (misura la fase di Prompt Processing)
+- `-n 128`: genera 128 token (misura la fase di Text Generation)
+- `-ngl 12`: numero di layer residenti in maniera fissa sulla VRAM della GPU
+- `--mmap 0`: serve per pinnare la memoria del sistema (default a 1, pinned memory disattivata)
+- `--fionda`: se presente, attiva lo scheduler dinamico di fionda
+
+Come interpretare i risultati
+- Prompt Processing: Indica quanti token al secondo vengono processati in fase di pre-fill
+- Text Generation): È il throughput effettivo in Tokens/s durante la generazione
 
 ---
 
-## 4. Rapporto Floating Ops / Memory Ops (Arithmetic Intensity)
+## 4. Esecuzione automatizzata dei benchmark
 
-L'*Arithmetic Intensity* (AI) si misura in **FLOPs / Byte** (operazioni in virgola mobile per ogni byte trasferito). Nell'inferenza autoregressiva (batch size = 1), l'AI è tipicamente molto basso (memory bound), mentre nel prompt processing (pre-fill) è alto (compute bound).
+Per eseguire automaticamente una batteria di benchmark abbiamo creato i seguenti script bash:
+- `run_benchmark.sh`  ->  testa diverse tipologie di prompt con lo stesso numero di layer fissi in VRAM
+- `run_ngl_sweep.sh`  ->  testa lo stesso prompt aumentando gradualmente il numero di layer fissi in VRAM
 
-Per misurarlo con precisione a livello hardware sui tensor core della 3060 Ti:
-
-```bash
-sudo ncu --metrics sm__ops_path_tensor.sum,dram__bytes.sum \
-  ./build/bin/llama-cli -m /percorso/al/modello.gguf -p "Ciao" -n 5 -ngl 99
-```
-*Nota: `ncu` richiede privilegi di amministratore per accedere ai contatori hardware (SM counters).*
-
-Il calcolo sarà:
-$$ \text{Arithmetic Intensity} = \frac{\text{sm\_\_ops\_path\_tensor.sum (FLOPs)}}{\text{dram\_\_bytes.sum (Bytes)}} $$
-
-Se vuoi l'intensità aritmetica "teorica", per un layer lineare (es. $W \cdot x$):
-- **FLOPs:** $2 \times N \times M$
-- **Bytes (Modello Q4_K_M):** $\approx \frac{N \times M}{2}$ bytes (perché pesi a 4-bit) + size di $x$.
-- Riducendo la precisione dei pesi (da FP16 a Q4), si dimezzano i byte trasferiti, **raddoppiando teoricamente l'Arithmetic Intensity**, mitigando il memory bottleneck.
-
----
-
-## Attenzione ai Modelli vs. VRAM
-Hai 8GB di VRAM.
-- I modelli **8B Q4_K_M** occupano circa 4.8 GB. Ci staranno **interamente** in VRAM, e vedrai un throughput altissimo.
-- I modelli **8B Q8_0** occupano circa 8.5 GB. Probabilmente sbaveranno sulla RAM e interverrà l'offload parziale (alcuni layer su CPU), facendo crollare le performance.
-- I modelli **14B** superano largamente gli 8GB.
-
-Questi modelli "che sbordano" (8B Q8, 14B) saranno i candidati perfetti per dimostrare il vantaggio di **Fionda**! Segnati attentamente il throughput di llama-bench su questi, perché è lì che vedremo se il double-buffering vince sul fallback via CPU.
+Prima di eseguire questi script è necessario aggiornare i path dei modelli con quelli dei propri modelli precedentemente scaricati. Inoltre, è consigliato testare un modello alla volta in modo da personalizzare i valori di ngl con i quali eseguire i test. Nel nostro caso, i modelli selezionati hanno rispettivamente 32, 48 e 40 layer, dunque abbiamo deciso di creare 3 liste personalizzate di valori con step da 1/8 del numero totale di layer del modello.
