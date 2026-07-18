@@ -1067,6 +1067,9 @@ void llama_context::set_embeddings(bool value) {
     //sched_need_reserve = true;
 }
 
+// saves the target's hidden states so the next decode can use them.
+// pos_base is the position that row 0 belongs to; set_input() later matches each token to
+// its row by position. works for a single sequence only.
 void llama_context::set_eagle_hidden(const float * data, int32_t n_tokens, llama_pos pos_base) {
     const int64_t n_embd = model.hparams.n_embd;
 

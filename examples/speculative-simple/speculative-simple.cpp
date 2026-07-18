@@ -85,8 +85,9 @@ int main(int argc, char ** argv) {
         params.speculative.model_dft = model_dft.get();
         params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
 
-        // EAGLE1 drafts from the target's hidden states - the target context must output
-        // them (as embeddings) starting from the prompt decode below
+        // here we check if the draft model is our eagle1, if it is we call llama_set_embeddings()
+        // which adds an additional output for the target model, the 'hiddens state' that the
+        // draft model will use for asserting future tokens.
         char arch_buf[64] = {0};
         llama_model_meta_val_str(model_dft.get(), "general.architecture", arch_buf, sizeof(arch_buf));
         if (strcmp(arch_buf, "eagle") == 0) {

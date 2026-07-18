@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
-# Convert an EAGLE1 draft checkpoint (e.g. yuhuili/EAGLE-LLaMA3.1-Instruct-8B) to GGUF.
-#
-# The EAGLE1 checkpoint contains only: embed_tokens, fc, layers.0.* (no input_layernorm,
-# no final norm, no lm_head). The lm_head is the base model's, applied to the raw layer
-# output - by default it is NOT embedded: at runtime the target's lm_head tensor is shared
-# with the draft (llama_set_eagle_lm_head), avoiding a ~400 MB VRAM duplicate. Tokenizer
-# metadata is copied from the base GGUF. The result loads in llama.cpp as architecture
-# "eagle". Use --keep-lm-head to embed a raw copy (standalone-loadable draft).
-#
+# this scripts only porpuse is to convert a model to the GGUF file format,
+# which is the standard format used in the llama.cpp inference engine.
+# We needed this script because the original eagle draft model is not in the GGUF format
+# The EAGLE1 checkpoint contains only: embed_tokens, fully connected, layers.0.* (no input_layernorm,
+# no final norm, no lm_head). The lm_head is the target model's, applied to the raw layer
+# output. At runtime the target's lm_head tensor is shared
+# with the draft one, avoiding a ~400 MB VRAM duplicate and allawing us to further exploit fionda scheduling.
 # Usage:
 #   python scripts/fionda/convert_eagle1_to_gguf.py \
 #       --eagle-dir models/EAGLE-LLaMA3.1-Instruct-8B \
@@ -64,7 +61,6 @@ def main() -> None:
     sd = torch.load(args.eagle_dir / "pytorch_model.bin", map_location="cpu", weights_only=False)
     logger.info("eagle checkpoint keys: %s", list(sd.keys()))
 
-    # tolerate both "layers.0." and "midlayer." naming
     def get(*names: str) -> torch.Tensor | None:
         for name in names:
             if name in sd:
@@ -96,7 +92,7 @@ def main() -> None:
     tensors["blk.0.ffn_norm.weight"]    = npy(get("layers.0.post_attention_layernorm.weight", "midlayer.post_attention_layernorm.weight")).astype(np.float32)
 
     handled = {"embed_tokens.weight", "fc.weight", "fc.bias"}
-    handled |= {k for k in sd.keys() if "input_layernorm" in k}  # dropped: EAGLE1 layer 0 has no attn_norm
+    handled |= {k for k in sd.keys() if "input_layernorm" in k}
     for k in sd.keys():
         if k not in handled and not any(part in k for part in ("self_attn", "mlp.", "post_attention_layernorm")):
             raise ValueError(f"unhandled checkpoint tensor: {k}")
@@ -124,7 +120,7 @@ def main() -> None:
     writer.add_layer_norm_rms_eps(config["rms_norm_eps"])
     writer.add_vocab_size(config["vocab_size"])
 
-    # tokenizer: copied verbatim from the base model GGUF
+    # tokenizer
     n_tok_kv = 0
     for field in reader.fields.values():
         if not field.name.startswith("tokenizer."):
@@ -140,7 +136,7 @@ def main() -> None:
         logger.info("writing %-28s %s %s", name, data.shape, data.dtype)
         writer.add_tensor(name, data)
 
-    # lm_head: by default omitted - the runtime shares the target's own tensor
+    # lm_head: by default omitted, the runtime shares the target's own tensor
     # (llama_set_eagle_lm_head). --keep-lm-head embeds a raw copy from the base model
     # (same quantization) for drafts that must load standalone.
     if args.keep_lm_head:

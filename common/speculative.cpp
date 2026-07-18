@@ -514,6 +514,11 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
         return j + 1 < (int32_t) prompt_tgt.size() ? prompt_tgt[j + 1] : id_last;
     }
 
+    // called once for a new prompt, gets the draft model ready.
+    // The target model has just read the whole prompt, and for every position it produced a
+    // "hidden state", a vector that summarizes what it understood so far. EAGLE uses these as hints.
+    // here we feed the draft each (next-token, hidden state) pair.
+    // After this the the draft model can predict the token that follows any position.
     void begin(const llama_tokens & prompt) override {
         llama_memory_clear(llama_get_memory(ctx_dft), true);
 
@@ -526,10 +531,9 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
             return;
         }
 
-        // the target's prompt decode produced hidden states for all positions 0..n1-1
-        // (embeddings mode outputs every token). feed pairs 0..n1-2 through the draft layer.
         feats.resize((size_t) (n1 - 1)*n_embd);
         for (int32_t j = 0; j < n1 - 1; ++j) {
+            // read the hidden state of the target model
             const float * f = llama_get_embeddings_ith(ctx_tgt, j);
             GGML_ASSERT(f != nullptr && "target context must run with embeddings enabled for eagle1");
             memcpy(feats.data() + (size_t) j*n_embd, f, n_embd*sizeof(float));
@@ -568,14 +572,17 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
 
         auto * mem_dft = llama_get_memory(ctx_dft);
 
-        // drop the speculative pairs of the previous round - they were computed with the
-        // draft's own approximate features and are re-fed below with true target features
+        // STEP 1: throw away last round's speculations.
         if ((int32_t) tokens_pair.size() > n_verified) {
             llama_memory_seq_rm(mem_dft, 0, n_verified, -1);
             tokens_pair.resize(n_verified);
         }
 
-        // consistency guard: the verified prefix must match the current target sequence
+        // STEP 2: make sure the draft sill agrees with the target
+        // The target may have rejected some tokens we had guessed earlier.
+        // if so, our stored sequence doesnt match what the target acutally kept.
+        // we compare token by token, find find where they start to differ and
+        // erase everything from there onward.
         {
             int32_t j = 0;
             while (j < n_verified && tokens_pair[j] == pair_token(prompt_tgt, id_last, j)) {
@@ -589,8 +596,10 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
             }
         }
 
-        // feed the newly verified pairs j = n_verified..seq_len-1 with the true target
-        // features from the last target decode (row j - pos_base_tgt)
+        // STEP 3: add the newly confimed tokens using real target hints.
+        // these tookens are now confimed by the target model, for each one we keep
+        // the target's hidden state and feed it to the draft concatenated with the matching token
+        // after this the draft is up to date again.
         const int32_t n_new = seq_len - n_verified;
         if (n_new <= 0) {
             // no fresh logits to draft from - should not happen in the normal flow
@@ -620,10 +629,14 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
 
         n_verified = seq_len;
 
-        // the upcoming verify decode starts with id_last at target position seq_len
         pos_base_tgt = seq_len;
 
-        // autoregressive draft loop (greedy chain)
+        // STEP 4: let the draft guess ahead again.
+        // here we predict tokens the target has not generated yet.
+        // we keep the draft's own output and feed it back in as the hint for the next guess.
+        // each step we keep the most likely token and keep going till the draft is confident enough,
+        // that means beeing >= params.p_min. these guesses are the ones that STEP 1 will
+        // throw away if the target model disagrees.
         feats.resize(n_embd);
 
         for (int i = 0; i < params.n_max; ++i) {
@@ -638,7 +651,8 @@ struct common_speculative_state_eagle1 : public common_speculative_state {
                 }
             }
 
-            // confidence of the greedy token (softmax)
+            // computing how confident is the draft model in its best token
+            // we use softmax to transform this confidence metric in a probability.
             double sum = 0.0;
             for (int32_t t = 0; t < n_vocab; ++t) {
                 sum += expf(logits[t] - l_best);
@@ -1056,7 +1070,6 @@ done:
 }
 
 // initialization of the speculative decoding system
-//
 common_speculative * common_speculative_init(
         common_params_speculative & params,
         llama_context             * ctx_tgt) {
@@ -1065,17 +1078,19 @@ common_speculative * common_speculative_init(
 
     llama_context * ctx_dft = nullptr;
     if (params.model_dft) {
+        // check if its eagle1
         char arch_buf[64] = {0};
         if (llama_model_meta_val_str(params.model_dft, "general.architecture", arch_buf, sizeof(arch_buf)) >= 0) {
             is_eagle1 = strcmp(arch_buf, "eagle") == 0;
         }
 
         if (is_eagle1) {
+            // when this flag is se tto true, embeddings are given as output during decoding.
             // the draft reads back its own raw layer output as the next-step feature
             params.cparams_dft.embeddings = true;
 
-            // share the target's lm_head with the draft - EAGLE1's head is a copy of the
-            // target's, so sharing avoids the VRAM duplicate (headless draft ggufs require it)
+            // share the target's lm_head with the draft's head is a copy of the
+            // target's, so sharing avoids the VRAM duplicate, so we have more space in VRAM.
             if (!llama_model_set_eagle_lm_head(params.model_dft, llama_get_model(ctx_tgt))) {
                 LOG_WRN("%s: could not share the target's lm_head - the draft will use its own copy\n", __func__);
             }

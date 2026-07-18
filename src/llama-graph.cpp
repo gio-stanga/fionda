@@ -355,7 +355,7 @@ void llm_graph_input_eagle_hidden::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_rows = (int64_t) eagle_hid->data.size() / n_embd;
 
-    // gather rows by absolute sequence position (single-sequence only)
+    // copy each target hidden state into the right spot of the draft's input.
     for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
         const int64_t row = ubatch->pos[i] - eagle_hid->pos_base;
 
@@ -1812,6 +1812,9 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     return cur;
 }
 
+
+// creates the empty input tensor that will hold the target's hidden states.
+// it gets filled in later, once per decode, by set_input() above.
 ggml_tensor * llm_graph_context::build_inp_eagle_hidden() const {
     GGML_ASSERT(eagle_hid != nullptr);
 

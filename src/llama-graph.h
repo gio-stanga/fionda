@@ -72,14 +72,13 @@ struct llama_cross {
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
 };
 
-// EAGLE1 draft model: per-position hidden states from the target model, fed as an extra
-// graph input alongside the token embeddings. rows are addressed by absolute sequence
-// position (single-sequence only). set via llama_set_eagle_hidden().
+// hidden states borrowed from the TARGET model, handed to the EAGLE1 draft as an extra input.
+// the draft combines them with the token embeddings to make its prediction.
 struct llama_eagle_hidden {
     int64_t   n_embd   = 0;
-    llama_pos pos_base = 0; // sequence position of row 0
+    llama_pos pos_base = 0; // the position in the sequence that row 0 belongs to
 
-    // hidden states data copied to host memory, [n_embd, n_rows]
+    // the hidden states, stored as a flat array of n_rows vectors, each n_embd long
     std::vector<float> data;
 };
 

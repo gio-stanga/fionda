@@ -335,7 +335,7 @@ struct llama_model::impl {
         void *       slot_consumed[2] = {};      // cudaEvent_t: the split reading slot N was dispatched
         int          cur_slot         = 0;       // slot currently being computed
         bool         initialized      = false;
-        
+
         // Profiling state
         void *       profile_dma_start[128]     = {};
         void *       profile_dma_end[128]       = {};
@@ -360,7 +360,7 @@ llama_model::~llama_model() {
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_consumed[0]);
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[1]);
         ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[0]);
-        
+
         for (int i = 0; i < 128; i++) {
             if (pimpl->fionda_vram.profile_dma_start[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_dma_start[i]);
             if (pimpl->fionda_vram.profile_dma_end[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_dma_end[i]);
@@ -395,7 +395,7 @@ bool llama_model::get_fionda_state(struct ggml_backend_fionda_params & params) c
     }
     *((int*)&fv.profile_block_cnt) = 0;
     params.profile_block_cnt = (int*)&fv.profile_block_cnt;
-    
+
     return true;
 }
 
@@ -2804,15 +2804,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     int fionda_opt_gap = 0;
     if (params.fionda_mode && !devices.empty() && n_gpu_layers > 0 && n_gpu_layers < n_layer) {
         ggml_backend_dev_t gpu_dev = devices[0];
-        
+
         // dynamically calculate average layer size and dimensions
         const size_t bench_size = pimpl->n_bytes / n_layer;
         const int bench_embd = hparams.n_embd;
-        
+
         ggml_backend_buffer_t buf_cpu = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(cpu_dev), bench_size);
         ggml_backend_buffer_t buf_gpu = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(gpu_dev), bench_size);
         ggml_backend_t backend_gpu = ggml_backend_dev_init(gpu_dev, nullptr);
-        
+
         if (buf_cpu && buf_gpu && backend_gpu) {
             struct ggml_init_params params_bench = {
                 /* .mem_size   = */ ggml_tensor_overhead() * 16 + ggml_graph_overhead(),
@@ -2820,45 +2820,45 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 /* .no_alloc   = */ true,
             };
             struct ggml_context * ctx = ggml_init(params_bench);
-            
+
             // 1. measure PCIe H2D transfer
             struct ggml_tensor * t_cpu = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, bench_size);
             struct ggml_tensor * t_gpu = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, bench_size);
-            
+
             void * addr_cpu = ggml_backend_buffer_get_base(buf_cpu);
             void * addr_gpu = ggml_backend_buffer_get_base(buf_gpu);
-            
+
             ggml_backend_tensor_alloc(buf_cpu, t_cpu, addr_cpu);
             ggml_backend_tensor_alloc(buf_gpu, t_gpu, addr_gpu);
-            
+
             int64_t t0 = ggml_time_us();
             ggml_backend_tensor_copy(t_cpu, t_gpu);
             int64_t t1 = ggml_time_us();
             t_pcie_ms = (t1 - t0) / 1000.0f;
-            
+
             // 2. measure GPU compute dynamically
             struct ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, bench_embd, bench_embd);
             struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, bench_embd, 512);
             struct ggml_tensor * c = ggml_mul_mat(ctx, a, b);
             struct ggml_cgraph * gf = ggml_new_graph(ctx);
             ggml_build_forward_expand(gf, c);
-            
+
             size_t size_a = bench_embd * bench_embd * sizeof(float);
             size_t size_b = bench_embd * 512 * sizeof(float);
             size_t size_c = bench_embd * 512 * sizeof(float);
-            
+
             // ensure we don't overflow the bench_size
             if (size_a + size_b + size_c <= bench_size) {
                 void * addr_a = (char *)addr_gpu;
                 void * addr_b = (char *)addr_gpu + size_a;
                 void * addr_c = (char *)addr_gpu + size_a + size_b;
-                
+
                 ggml_backend_tensor_alloc(buf_gpu, a, addr_a);
                 ggml_backend_tensor_alloc(buf_gpu, b, addr_b);
                 ggml_backend_tensor_alloc(buf_gpu, c, addr_c);
-                
+
                 ggml_backend_graph_compute(backend_gpu, gf); // warmup
-                
+
                 t0 = ggml_time_us();
                 ggml_backend_graph_compute(backend_gpu, gf);
                 t1 = ggml_time_us();
@@ -2866,20 +2866,20 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             } else {
                 LLAMA_LOG_WARN("%s: fionda: layer too small for benchmark matrices\n", __func__);
             }
-            
+
             ggml_free(ctx);
-            
+
             // 3. calculate optimal gap
             if (t_gpu_ms > 0) {
                 fionda_opt_gap = (int)std::ceil(t_pcie_ms / t_gpu_ms);
             }
-            
+
             LLAMA_LOG_INFO("%s: fionda: micro-benchmark complete. PCIe H2D = %.2f ms, GPU Compute = %.2f ms, Optimal Gap G = %d\n",
                            __func__, t_pcie_ms, t_gpu_ms, fionda_opt_gap);
         } else {
             LLAMA_LOG_WARN("%s: fionda: micro-benchmark failed to allocate buffers\n", __func__);
         }
-        
+
         if (backend_gpu) ggml_backend_synchronize(backend_gpu);
         if (backend_gpu) ggml_backend_free(backend_gpu);
         if (buf_gpu)     ggml_backend_buffer_free(buf_gpu);
@@ -2898,13 +2898,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // it equals n_layer - clamped n_gpu.
     const int fionda_n_gpu = fionda_interleave ? std::min(n_gpu_layers, n_layer) : 0;
     const int fionda_n_cpu = fionda_interleave ? (n_layer - fionda_n_gpu) : 0;
-    
+
     // evaluate hardware coefficient
     if (fionda_interleave && fionda_n_cpu > 0 && fionda_opt_gap > 0) {
         int natural_gap = fionda_n_gpu / fionda_n_cpu;
         LLAMA_LOG_INFO("%s: fionda: Hardware Coefficient Analysis -> Available Gap = %d, Required Gap = %d\n",
                        __func__, natural_gap, fionda_opt_gap);
-                       
+
         if (natural_gap < fionda_opt_gap) {
             LLAMA_LOG_WARN("=================================================================================\n");
             LLAMA_LOG_WARN("[FIONDA WARNING] HARDWARE BOTTLENECK DETECTED!\n");
@@ -8288,7 +8288,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1]);
             ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[0]);
             ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[1]);
-            
+
             for (int i = 0; i < 128; i++) {
                 ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_start[i]);
                 ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_end[i]);
@@ -9415,6 +9415,12 @@ uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
 }
 
+// lets the EAGLE1 draft reuse the target's final output layer instead of loading its own copy.
+// this is safe and gives identical results: an EAGLE1 draft is built to work with the target's
+// exact output layer, so the two are the same weights. reusing it saves a large chunk of GPU
+// memory. the draft only borrows this layer, so the target model must stay alive while the draft
+// is used. the checks below reject a real size mismatch, and warn if the shared layer sits in
+// CPU memory (which would make the draft slow, fetching it for every token).
 bool llama_model_set_eagle_lm_head(llama_model * model, const llama_model * model_tgt) {
     ggml_tensor * head = model_tgt ? model_tgt->output : nullptr;
 
