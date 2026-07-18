@@ -5331,7 +5331,8 @@ void ggml_backend_cuda_fionda_vram_free(void * ptr) {
     }
 }
 
-int ggml_backend_cuda_fionda_stream_create(void ** out_stream) {
+int ggml_backend_cuda_fionda_stream_create(void ** out_stream, int device) {
+    ggml_cuda_set_device(device);
     cudaError_t err = cudaStreamCreateWithFlags(
         reinterpret_cast<cudaStream_t *>(out_stream),
         cudaStreamNonBlocking);
@@ -5348,7 +5349,8 @@ void ggml_backend_cuda_fionda_stream_destroy(void * stream) {
     }
 }
 
-int ggml_backend_cuda_fionda_event_create(void ** out_event) {
+int ggml_backend_cuda_fionda_event_create(void ** out_event, int device) {
+    ggml_cuda_set_device(device);
     cudaError_t err = cudaEventCreateWithFlags(
         reinterpret_cast<cudaEvent_t *>(out_event),
         cudaEventDisableTiming);
@@ -5387,7 +5389,8 @@ void ggml_backend_cuda_fionda_stream_wait_event(void * stream, void * event) {
     CUDA_CHECK(cudaStreamWaitEvent(reinterpret_cast<cudaStream_t>(stream), reinterpret_cast<cudaEvent_t>(event), 0));
 }
 
-int ggml_backend_cuda_fionda_event_create_timing(void ** out_event) {
+int ggml_backend_cuda_fionda_event_create_timing(void ** out_event, int device) {
+    ggml_cuda_set_device(device);
     cudaError_t err = cudaEventCreate(reinterpret_cast<cudaEvent_t *>(out_event));
     if (err != cudaSuccess) {
         GGML_LOG_ERROR("%s: cudaEventCreate failed: %s\n",

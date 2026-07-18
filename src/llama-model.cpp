@@ -341,7 +341,7 @@ struct llama_model::impl {
         void *       profile_dma_end[128]       = {};
         void *       profile_compute_start[128] = {};
         void *       profile_compute_end[128]   = {};
-        int          profile_block_cnt          = 0;
+        mutable int  profile_block_cnt          = 0;
     } fionda_vram;
 };
 
@@ -393,8 +393,8 @@ bool llama_model::get_fionda_state(struct ggml_backend_fionda_params & params) c
         params.profile_compute_start[i] = fv.profile_compute_start[i];
         params.profile_compute_end[i]   = fv.profile_compute_end[i];
     }
-    *((int*)&fv.profile_block_cnt) = 0;
-    params.profile_block_cnt = (int*)&fv.profile_block_cnt;
+    fv.profile_block_cnt = 0;
+    params.profile_block_cnt = &fv.profile_block_cnt;
     
     return true;
 }
@@ -8180,7 +8180,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     // fionda: allocate VRAM double buffer
-    if (params.fionda_mode && !devices.empty()) {
+    if (params.fionda_mode && !devices.empty() && n_gpu_layers > 0 && n_gpu_layers < n_layer) {
         // Find the CUDA device ID to use (first GPU device)
         // devices[0] is the primary GPU in the case of single GPU setups.
         // The GPU device index in CUDA is stored as an int inside the backend context.
@@ -8244,17 +8244,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             fv.slot_size   = slot_size;
 
 #ifdef GGML_USE_CUDA
-            ggml_backend_cuda_fionda_stream_create(&fv.transfer_stream);
-            ggml_backend_cuda_fionda_event_create(&fv.slot_ready[0]);
-            ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1]);
-            ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[0]);
-            ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[1]);
+            ggml_backend_cuda_fionda_stream_create(&fv.transfer_stream, cuda_device);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_ready[0], cuda_device);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1], cuda_device);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[0], cuda_device);
+            ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[1], cuda_device);
             
             for (int i = 0; i < 128; i++) {
-                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_start[i]);
-                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_end[i]);
-                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_compute_start[i]);
-                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_compute_end[i]);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_start[i], cuda_device);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_end[i], cuda_device);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_compute_start[i], cuda_device);
+                ggml_backend_cuda_fionda_event_create_timing(&fv.profile_compute_end[i], cuda_device);
             }
 #endif
 
