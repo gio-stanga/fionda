@@ -11,29 +11,29 @@
 ---
 
 ## OS Configuration
-Comandi eseguiti prima di lanciare i test:
+To reduce OS noise during benchmarks, set the CPU and GPU power profile to performance and disable update search and file indexing. On Ubuntu, run these commands.
 ```bash
-# imposta tutti i core su performance
+# set all cores to performance
 echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-# abilita il persistence mode sulla GPU
+# enable persistence mode on the GPU
 sudo nvidia-smi -pm 1
 
-# disattiva ricerca aggiornamenti indicizzazione
+# disable update search and indexing
 sudo systemctl stop unattended-upgrades
 systemctl --user stop tracker-extract-3 tracker-miner-fs-3
 ```
 
 ---
 
-## Test mmap con Llama 3.1 (ngl 12,5%, no speculative)
+## mmap test with Llama 3.1 (ngl 12.5%, no speculative)
 
 1. Vanilla `--mmap 0` vs `--mmap 1` 
-    - pp passa da 900 t/s a 800 t/s
-    - tg rimane costante a 9,54 t/s
+    - pp goes from 900 t/s to 800 t/s
+    - tg remains constant at 9.54 t/s
 
 2. Fionda `--mmap 0` vs `--mmap 1` 
-    - pp passa da 1130 t/s a 850 t/s
-    - tg rimane costante a 9,20 t/s
+    - pp goes from 1130 t/s to 850 t/s
+    - tg remains constant at 9.20 t/s
 
-=> meglio settare `--mmap 0` su entrambi
+=> better to set `--mmap 0` on both

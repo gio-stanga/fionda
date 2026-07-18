@@ -2741,6 +2741,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     const int n_layer      = hparams.n_layer;
     const int n_gpu_layers = this->n_gpu_layers();
 
+    // Fionda requires CPU-resident tensors to be in regular allocated buffers, not mmap'd regions.
+    // mmap'd pages are not pinned, so cudaMemcpyAsync on a non-pinned source degrades to a
+    // synchronous copy, defeating the entire async DMA double-buffering design.
     const bool use_mmap_buffer = !params.fionda_mode;
 
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
