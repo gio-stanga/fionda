@@ -1,91 +1,116 @@
-# Fionda: Llama.cpp Benchmarking Guide
+# Fionda Benchmarking Guide
 
-Prima di modificare la codebase di `llama.cpp` per inserire il double buffering, è fondamentale raccogliere le metriche di *baseline*. Questo ci permetterà di dimostrare l'effettivo miglioramento del *memory bottleneck* e del pipelining PCIe.
+## Premise
 
-Di seguito la procedura per estrarre le metriche richieste sul tuo setup (Ubuntu 24.04, Ryzen 5 5600G, RTX 3060 Ti 8GB).
+The Fionda scheduler aims to speed up the prompt processing phase through dynamic scheduling of layers in VRAM. Furthermore, the Fionda implementation has been built entirely in CUDA and C++. We will therefore assume that the hardware on which it runs is equipped with an Nvidia graphics card with compute capabilities >= 3.7 and CUDA version >= 9.0
 
-## 1. Compilazione Ottimizzata
+Fionda also supports speculative decoding via **EAGLE1** (see [README](../README.md) for how it works). This guide covers benchmarks with and without speculation.
 
-Per avere metriche affidabili, assicurati di compilare in modalità **Release** e con il supporto CUDA abilitato.
+---
 
+## 1. Downloading the models
+
+### 1.1 Target models
+
+To download the models, visit https://huggingface.co/ and download the following models in `.gguf` format:
+- [Meta Llama 3.1 8B](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
+- [Gemma 4 12B](https://huggingface.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF)
+- [Qwen 3.6 14B](https://huggingface.co/tvall43/Qwen3.6-14B-A3B-VibeForged-v2-GGUF)
+
+For each of these models, download the desired quantizations. In our tests we used the `Q4_K_M` and `Q8_0` quantizations.
+
+### 1.2 Draft model (EAGLE1, only needed for speculation)
+
+Speculation needs a **draft model** matched to a specific target. We provide one for **Meta Llama 3.1 8B Instruct** only; the other two models are benchmarked without speculation. It uses ~160 MB of VRAM (its `lm_head` is shared with the target).
+
+Generate it from the EAGLE checkpoint ([yuhuili/EAGLE-LLaMA3.1-Instruct-8B](https://huggingface.co/yuhuili/EAGLE-LLaMA3.1-Instruct-8B)):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch gguf numpy sentencepiece
+
+hf download yuhuili/EAGLE-LLaMA3.1-Instruct-8B --local-dir models/EAGLE-LLaMA3.1-Instruct-8B
+
+# needs the base GGUF for tokenizer metadata; build the project first (step 2) so llama-quantize exists
+python scripts/fionda/convert_eagle1_to_gguf.py \
+    --eagle-dir models/EAGLE-LLaMA3.1-Instruct-8B \
+    --base-gguf models/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf \
+    --outfile   models/eagle1-llama3.1-8b-instruct-nohead.gguf
+
+./build/bin/llama-quantize --allow-requantize --token-embedding-type q4_k \
+    models/eagle1-llama3.1-8b-instruct-nohead.gguf \
+    models/eagle1-llama3.1-8b-instruct-nohead-q4_k_m.gguf Q4_K_M
+```
+
+(`--token-embedding-type q4_k` is required: without an output tensor the quantize recipe would otherwise bump `token_embd` up to Q6_K.)
+
+---
+
+## 2. Compilation
+
+Compile the project in Release mode
 ```bash
 mkdir -p build
 cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j 12
 ```
 
-> [!WARNING]
-> Mai eseguire benchmark su build di tipo `Debug`. Le prestazioni crollano drasticamente.
+Never benchmark a Debug build. This build also provides `llama-quantize`, used by the draft conversion in step 1.2, so build before converting the draft.
 
----
-
-## 2. Misurare Throughput (Token/s) e Latenza (TTFT)
-
-`llama.cpp` include uno strumento ufficiale molto preciso chiamato `llama-bench`. È il modo migliore per testare diverse configurazioni senza l'overhead dell'interfaccia chat.
-
-**Comando:**
+To reduce OS noise during benchmarks, set the CPU and GPU power profile to performance and disable update search and file indexing. On Ubuntu, run these commands.
 ```bash
-./build/bin/llama-bench -m /percorso/al/modello.gguf -p 512 -n 128 -ngl 99
-```
-*Spiegazione dei parametri:*
-- `-p 512`: Prompt di 512 token (misura la fase di **Prompt Processing**, da cui deriva il TTFT).
-- `-n 128`: Genera 128 token (misura la fase di **Text Generation**, il throughput).
-- `-ngl 99`: Tenta di offloadare tutti i layer sulla GPU (fino a esaurimento VRAM).
+# set all cores to performance
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-**Cosa leggere nell'output:**
-- **PP (Prompt Processing):** Indica quanti token al secondo vengono processati in fase di pre-fill. Da questo calcoli il **TTFT (Time To First Token)**: $TTFT = \frac{\text{Token del Prompt}}{\text{Throughput PP}}$.
-- **TG (Text Generation):** È il throughput effettivo in **Tokens/s** durante la generazione.
+# enable persistence mode on the GPU
+sudo nvidia-smi -pm 1
+
+# disable update search and indexing
+sudo systemctl stop unattended-upgrades
+systemctl --user stop tracker-extract-3 tracker-miner-fs-3
+```
 
 ---
 
-## 3. Misurare TFLOPS e Memory Bandwidth (GB/s)
+## 3. Manual benchmark execution
 
-Sebbene `llama.cpp` stampi un report alla fine della generazione tramite `llama-cli`, per ottenere i TFLOPS hardware reali e l'effettivo GB/s sul bus di memoria/PCIe, il gold standard è usare **NVIDIA Nsight Compute (`ncu`)** e **Nsight Systems (`nsys`)**.
-
-### Nsight Systems (nsys)
-Perfetto per visualizzare se il bus PCIe sta limitando la GPU.
+`llama.cpp` includes `llama-bench`, an official tool designed specifically for running benchmarks in a precise and reliable way. It is the best way to test different configurations without the UI overhead
 ```bash
-nsys profile -t cuda,nvtx,osrt --stats=true \
-  ./build/bin/llama-cli -m /percorso/al/modello.gguf -p "Scrivi una breve poesia:" -n 10 -ngl 99
+./build/bin/llama-bench -m /path/to/model.gguf -p 512 -n 128 -ngl 12 --mmap 0 --fionda
 ```
-Questo genererà un file `.nsys-rep`. Aprendolo nella GUI di *Nsight Systems*, vedrai l'esatta timeline dei trasferimenti `cudaMemcpy` (Host-to-Device) contro le esecuzioni dei kernel. Questo sarà il tuo **riferimento visivo principale** per dimostrare che Fionda ha sovrapposto (pipelined) i trasferimenti!
 
-### Report interno di llama.cpp
-Alla fine dell'esecuzione di `./build/bin/llama-cli`, noterai delle righe come queste:
-```text
-llama_print_timings: prompt eval time =  XXX ms /   512 tokens (  YYY ms per token,  ZZZ tokens per second)
-llama_print_timings:        eval time =  XXX ms /   128 runs   (  YYY ms per token,  ZZZ tokens per second)
-```
-Questo è utile per calcoli rapidi.
+- `-p 512`: prompt of 512 tokens (measures the Prompt Processing phase)
+- `-n 128`: generates 128 tokens (measures the Text Generation phase)
+- `-ngl 12`: number of layers permanently resident in GPU VRAM
+- `--mmap 0`: used to pin system memory (defaults to 1, pinned memory disabled)
+- `--fionda`: if present, enables the Fionda dynamic scheduler
 
----
-
-## 4. Rapporto Floating Ops / Memory Ops (Arithmetic Intensity)
-
-L'*Arithmetic Intensity* (AI) si misura in **FLOPs / Byte** (operazioni in virgola mobile per ogni byte trasferito). Nell'inferenza autoregressiva (batch size = 1), l'AI è tipicamente molto basso (memory bound), mentre nel prompt processing (pre-fill) è alto (compute bound).
-
-Per misurarlo con precisione a livello hardware sui tensor core della 3060 Ti:
-
+To benchmark **with speculation**, add the draft model and its flags:
 ```bash
-sudo ncu --metrics sm__ops_path_tensor.sum,dram__bytes.sum \
-  ./build/bin/llama-cli -m /percorso/al/modello.gguf -p "Ciao" -n 5 -ngl 99
+./build/bin/llama-bench -m /path/to/target.gguf -p 512 -n 128 -ngl 12 --mmap 0 --fionda \
+    -md /path/to/eagle1-draft.gguf --draft-max 4
 ```
-*Nota: `ncu` richiede privilegi di amministratore per accedere ai contatori hardware (SM counters).*
 
-Il calcolo sarà:
-$$ \text{Arithmetic Intensity} = \frac{\text{sm\_\_ops\_path\_tensor.sum (FLOPs)}}{\text{dram\_\_bytes.sum (Bytes)}} $$
+- `-md`: draft model — its presence enables EAGLE1 speculation on the text generation tests
+- `--draft-max N`: maximum number of tokens the draft proposes per target pass
+- `--draft-p-min`: confidence threshold below which the draft stops proposing (defaults to 0.75)
 
-Se vuoi l'intensità aritmetica "teorica", per un layer lineare (es. $W \cdot x$):
-- **FLOPs:** $2 \times N \times M$
-- **Bytes (Modello Q4_K_M):** $\approx \frac{N \times M}{2}$ bytes (perché pesi a 4-bit) + size di $x$.
-- Riducendo la precisione dei pesi (da FP16 a Q4), si dimezzano i byte trasferiti, **raddoppiando teoricamente l'Arithmetic Intensity**, mitigando il memory bottleneck.
+The draft stays fully resident in VRAM (`--fionda` schedules only the target), so leave ~160 MB for it when choosing `-ngl`.
+
+How to interpret the results
+- Prompt Processing: Indicates how many tokens per second are processed during the pre-fill phase
+- Text Generation: Is the effective throughput in Tokens/s during generation
+- With `-md`, the text generation rows also report `accept%` (share of drafted tokens the target accepted; healthy is ~45–60%) and `dm` (draft-max). Prompt Processing is expected to be *lower* with `-md`.
 
 ---
 
-## Attenzione ai Modelli vs. VRAM
-Hai 8GB di VRAM.
-- I modelli **8B Q4_K_M** occupano circa 4.8 GB. Ci staranno **interamente** in VRAM, e vedrai un throughput altissimo.
-- I modelli **8B Q8_0** occupano circa 8.5 GB. Probabilmente sbaveranno sulla RAM e interverrà l'offload parziale (alcuni layer su CPU), facendo crollare le performance.
-- I modelli **14B** superano largamente gli 8GB.
+## 4. Automated benchmark execution
 
-Questi modelli "che sbordano" (8B Q8, 14B) saranno i candidati perfetti per dimostrare il vantaggio di **Fionda**! Segnati attentamente il throughput di llama-bench su questi, perché è lì che vedremo se il double-buffering vince sul fallback via CPU.
+To automatically run a battery of benchmarks we created the following bash scripts:
+- `run_benchmark.sh`  ->  tests different prompt sizes with the same number of fixed layers in VRAM
+- `run_ngl_sweep.sh`  ->  tests the same prompt while gradually increasing the number of fixed layers in VRAM
+- `run_ngl_sweep_eagle.sh`  ->  same NGL sweep but at equal VRAM budget, producing three blocks per configuration: `>> VANILLA:` (no fionda), `>> FIONDA:` (`--fionda`), and `>> FIONDA+EAGLE:` (`--fionda -md <draft> --draft-max 4`)
+
+Before running these scripts, the model paths must be updated with those of your previously downloaded models. Furthermore, it is recommended to test one model at a time in order to customize the ngl values used for testing. In our case, the selected models have 32, 48 and 40 layers respectively, so we decided to create 3 custom value lists with a step of 1/8 of the total number of layers in the model.
+
+`run_ngl_sweep_eagle.sh` runs only on the Llama 3.1 8B Instruct target (the only one with a matching draft) and keeps all three blocks at the same VRAM budget. As a sanity check, `accept%` should sit around ~45–60%; much lower means the draft and target are mismatched.
