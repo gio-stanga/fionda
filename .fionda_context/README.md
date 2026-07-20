@@ -1,59 +1,62 @@
 # Fionda
-Dynamic Scheduling of dense LLMs layers from host memory to VRAM over PCIe
 
-## Goal
-To enabel the local inference of dense LLMs that are bigger than the available VRAM using consumer grade NVIDIA GPUs while maintaining decent token/sec performances.
+Fionda is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that introduces a dynamic layer scheduler designed to improve prompt processing throughput in partial GPU offloading scenarios.
 
-## Description of the Idea
-To reach the goal we are going to fork llama.cpp and rewrite (or create if needed) the scheduler that transfers layers from the host RAM to the device VRAM over PCIe.
-The scheduler has to dynamically move layers from RAM to VRAM in this way: while layer N is being computed on the device, the scheduler starts loading layer N+1 in the device over PCIe. When N is computing in the device the scheduler launches layer N+1 and takes back to the RAM layer N-1, which is no longer needed.
-This way we leverage the latency hiding of a layer being computed in the device while loading the following layer in the device in the meantime.
+---
 
-The data transfer is much slower than the computation of one layer, so we need to leverage techniques to make the data transfer faster, namely:
-- using quantized models to linearly speedup transfer
-- use speculative decoding to predict the following token and enable the possibility to process multiple tokens on the same layer while it is already in memory, increasing the compute time of the gpu and giving us more room to upload the following layer.
+## The problem with the Vanilla scheduler
 
-## Current State
-At the moment the goal is to read and understand llama.cpp, in order to know what needs to be changed and/or created.
-After that we will write the scheduler for NVIDIA GPUs.
+When a model is too large to fit entirely in VRAM, llama.cpp uses the `-ngl` parameter to decide how many transformer layers to keep on the GPU. The remaining layers stay in system RAM and are computed by the CPU.
 
-## Strategy
-llama.cpp is a big and complex codebase cosidering many edge cases. We are just gonna work for the most basic scenario, which is dense LLM, GGUF format from Hugging Face with the possibility to run models quiantized to INT8, and INT4.
-We are already inside a clone of llama.cpp
+The standard scheduling strategy is straightforward: the first N layers are processed on the CPU, and the last `-ngl` layers are processed on the GPU. This means that for every token in the prompt, execution must alternate between CPU and GPU once per inference pass, which result in a sequential handoff that stalls on the PCIe bus each time data crosses from one side to the other.
 
+In practice, while the GPU is computing its block of layers, the CPU and PCIe bus sit idle. And while the CPU is computing its block, the GPU sits idle. There is no overlap between these fases.
 
+---
 
+## Fionda approach
 
-## Project structure
+The core idea behind Fionda is to keep the GPU busy for as long as possible by hiding PCIe transfers behind useful computation.
 
-### Modelli su cui testare (devono essere densi)
-- gemma 4 (12B parameters)
-- llama 3.1 (8B parameters)
-- qwen 3 (14B parameters)
+Instead of grouping all CPU layers at the beginning and all GPU layers at the end, Fionda **interleaves** them by spreading CPU-resident (dynamic) layers uniformly among GPU-resident (static) layers using a Bresenham-like algorithm. The result is that after each dynamic layer, if the `-ngl` parameter is high enough, there is always a sequence of static GPU layers to compute while the next dynamic layer is being transferred asynchronously over PCIe.
 
+At model load time, Fionda also runs a small hardware benchmark to estimate the optimal number of GPU layers needed per CPU layer to fully hide the transfer latency. If the current configuration cannot achieve 100% overlap, a warning is printed with a concrete suggestion.
 
-### Tipi di quantizzazione da testare
-- INT8
-- INT4
-- INT3 e INT2 (troppo poco accurato??)
+---
 
+## Fionda scheduler implementation
 
-### Definire su che parametri fare i benchmark
-- rapporto floating op / mem op
-- throughput TOKEN/s del modello
-- latenza tra prompt e inizio generazione risposta
-- TFLOPS e GB/s di picco e medi registrati
+The implementation touches several layers of the stack:
 
+- **Layer interleaving** (`src/llama-model.cpp`): when `--fionda` is active and the model is partially offloaded, layers are assigned to CPU or GPU using a Bresenham distribution instead of the standard contiguous block. The output layer is always kept on the GPU.
 
-### Definire dove e come eseguire i benchmark
-- CUDA events per misurazione dei dati
-- esecuzione su desktop con RTX 3060 Ti
-- valutiamo se riusciamo ad eseguire da altre parti
+- **Async DMA double buffer** (`ggml/src/ggml-backend.cpp`): we extended `ggml_backend_sched` with a VRAM double buffer. Before a GPU split executes, the weights of the next CPU split are already being copied into the alternate VRAM slot over a dedicated `cudaStreamNonBlocking` transfer stream. Synchronization between the transfer stream and the compute stream is handled via CUDA events, so neither stream blocks the other unnecessarily.
 
+- **CUDA resource management** (`ggml/src/ggml-cuda/ggml-cuda.cu`, `ggml/include/ggml-cuda.h`): a thin API layer exposes VRAM allocation, stream and event creation, async memcpy, and inter-stream synchronization primitives. All resources are created with the correct CUDA device context set explicitly.
 
-### Definire la modalità di sviluppo iterativa
-Partendo dal caso studio base (niente codice custom, quantizzazione FP16, ecc..), eseguire delle ottimizzazioni incrementali e documentare accuratamente l'incremento
-di performance riscontrato sulle varie architetture. Esempio di roadmap:
-- benchmark su performance di partenza
-- benchmark con aggiunta di Layer-by-Layer Offloading
-- benchmark con aggiunta di speculative decoding
+- **Profiling** (`include/llama.h`, `src/llama-model.cpp`): Fionda records CUDA timing events around each DMA transfer and each GPU compute block. After inference, `llama_model_get_fionda_profile()` returns average compute time, average DMA time, and the percentage of transfer latency that was successfully hidden. These metrics are also surfaced in `llama-bench` output.
+
+- **Activation gate** (`src/llama-context.cpp`): the async double buffer is only engaged for batches large enough to go through the op-offload path (prompt processing). Token generation, which uses single-token batches, falls back to standard scheduling automatically.
+
+To visualize the full implementation diff, execute this command below
+```bash
+git diff 0cc4m/cpu-arm-nvfp4-fix..fionda-scheduler -- . ':!.fionda_context' > .fionda_context/implementation.diff
+```
+
+---
+
+## Usage
+
+Build with CUDA support:
+```bash
+mkdir -p build
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j 12
+```
+
+Run inference with Fionda enabled:
+```bash
+./build/bin/llama-cli -m path/to/model.gguf -ngl 20 --mmap 0 --fionda -p "Your prompt here"
+```
+
+If you wish to run benchmarks, check `benchmarking_guide.md`
