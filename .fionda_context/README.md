@@ -43,3 +43,9 @@ The whole logic of the speculation is in [`speculative.cpp`](common/speculative.
 Can be found in [src/models/eagle.cpp](src/models/eagle.cpp).
 In this file we find the definition of the draft model, layer per layer.
 It concatenates the token embedding with the target's hidden state, passes it through a fusion layer and a single decoder layer, and projects to vocabulary via the shared LM-head.
+
+### Full implementation details
+If you wish to see the full implementation diff of the speculative optimizations starting from the fionda scheduler, run the following comman
+```bash
+git diff fionda-scheduler..fionda-speculative -- . ':!.fionda_context' > .fionda_context/implementation.diff
+```

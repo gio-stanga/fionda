@@ -12,12 +12,7 @@ Fionda also supports speculative decoding via **EAGLE1** (see [README](../README
 
 ### 1.1 Target models
 
-To download the models, visit https://huggingface.co/ and download the following models in `.gguf` format:
-- [Meta Llama 3.1 8B](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
-- [Gemma 4 12B](https://huggingface.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF)
-- [Qwen 3.6 14B](https://huggingface.co/tvall43/Qwen3.6-14B-A3B-VibeForged-v2-GGUF)
-
-For each of these models, download the desired quantizations. In our tests we used the `Q4_K_M` and `Q8_0` quantizations.
+To download the models, visit https://huggingface.co/ and download [Meta Llama 3.1 8B](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF) in `.gguf` format. In our tests we used the `Q4_K_M` and `Q8_0` quantizations.
 
 ### 1.2 Draft model (EAGLE1, only needed for speculation)
 
@@ -108,8 +103,7 @@ How to interpret the results
 
 To automatically run a battery of benchmarks we created the following bash scripts:
 - `run_benchmark.sh`  ->  tests different prompt sizes with the same number of fixed layers in VRAM
-- `run_ngl_sweep.sh`  ->  tests the same prompt while gradually increasing the number of fixed layers in VRAM
-- `run_ngl_sweep_eagle.sh`  ->  same NGL sweep but at equal VRAM budget, producing three blocks per configuration: `>> VANILLA:` (no fionda), `>> FIONDA:` (`--fionda`), and `>> FIONDA+EAGLE:` (`--fionda -md <draft> --draft-max 4`)
+- `run_ngl_sweep_eagle.sh`  ->  tests the same prompt while gradually increasing the number of fixed layers in VRAM, producing three blocks per configuration: `>> VANILLA:` (no fionda), `>> FIONDA:` (`--fionda`), and `>> FIONDA+EAGLE:` (`--fionda -md <draft> --draft-max 4`)
 
 Before running these scripts, the model paths must be updated with those of your previously downloaded models. Furthermore, it is recommended to test one model at a time in order to customize the ngl values used for testing. In our case, the selected models have 32, 48 and 40 layers respectively, so we decided to create 3 custom value lists with a step of 1/8 of the total number of layers in the model.
 
