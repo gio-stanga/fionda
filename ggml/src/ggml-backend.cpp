@@ -1457,7 +1457,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
-    // fionda only engages when both enabled and active (active gates it to prompt processing batches)
+    // fionda only engages when both enabled and active (prompt processing batches)
     const bool fionda_on = sched->fionda_enabled && sched->fionda_active;
 
     // profiling: reset block counter at the start of each graph compute
