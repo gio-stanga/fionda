@@ -1457,10 +1457,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
-    // fionda only engages when both enabled and active (active gates it to prompt processing batches)
+    // fionda only engages when both enabled and active (prompt processing batches)
     const bool fionda_on = sched->fionda_enabled && sched->fionda_active;
 
-    // fionda profiling: reset block counter at the start of each graph compute
+    // profiling: reset block counter at the start of each graph compute
     bool fionda_profile_block_open = false;
     int fionda_profile_dma_cnt = 0;
     if (fionda_on && sched->fionda_params.profile_block_cnt) {
@@ -1493,7 +1493,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         // do not overwrite the slot while the split that last read it may still be running
                         fp.stream_wait_event_cb(fp.transfer_stream, fp.slot_consumed[slot]);
                         
-                        // Profiling: record start of DMA
+                        // profiling: record start of DMA
                         if (fp.profile_block_cnt && fionda_profile_dma_cnt < 128) {
                             fp.event_record_cb(fp.profile_dma_start[fionda_profile_dma_cnt], fp.transfer_stream);
                         }
@@ -1518,7 +1518,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 int slot = sched->fionda_cur_slot;
                 fp.event_record_cb(fp.slot_ready[slot], fp.transfer_stream);
                 
-                // Profiling: record end of DMA
+                // profiling: record end of DMA
                 if (fp.profile_block_cnt && fionda_profile_dma_cnt < 128) {
                     fp.event_record_cb(fp.profile_dma_end[fionda_profile_dma_cnt], fp.transfer_stream);
                     fionda_profile_dma_cnt++;
@@ -1563,7 +1563,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 ggml_backend_tensor_copy(input, input_cpy);
             } else if (is_fionda_weight) {
                 if (!fionda_synced_this_split) {
-                    // Profiling: close the previous block's compute interval
+                    // profiling: close the previous block's compute interval
                     if (fionda_profile_block_open && sched->fionda_params.profile_block_cnt && *sched->fionda_params.profile_block_cnt < 128) {
                         sched->fionda_params.compute_event_record_cb(split_backend, sched->fionda_params.profile_compute_end[*sched->fionda_params.profile_block_cnt]);
                         (*sched->fionda_params.profile_block_cnt)++;
@@ -1577,7 +1577,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     fionda_start_dma(split_id + 1);
                     fionda_synced_this_split = true;
 
-                    // Profiling: open a new block's compute interval
+                    // profiling: open a new block's compute interval
                     if (sched->fionda_params.profile_block_cnt && *sched->fionda_params.profile_block_cnt < 128) {
                         sched->fionda_params.compute_event_record_cb(split_backend, sched->fionda_params.profile_compute_start[*sched->fionda_params.profile_block_cnt]);
                     }
@@ -1744,10 +1744,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
     }
 
-    // Profiling: close the last fionda block's compute interval
+    // profiling: close the last fionda block's compute interval
     if (fionda_profile_block_open && sched->fionda_params.profile_block_cnt && *sched->fionda_params.profile_block_cnt < 128) {
-        // We need to record on the compute stream of the last split's backend.
-        // Use the backend from the last split that had fionda weights.
+        // we need to record on the compute stream of the last split's backend
+        // use the backend from the last split that had fionda weights
         ggml_backend_t last_backend = sched->backends[splits[sched->n_splits - 1].backend_id];
         sched->fionda_params.compute_event_record_cb(last_backend, sched->fionda_params.profile_compute_end[*sched->fionda_params.profile_block_cnt]);
         (*sched->fionda_params.profile_block_cnt)++;

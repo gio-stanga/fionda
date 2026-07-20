@@ -45,9 +45,9 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 // fionda VRAM double buffer API
 GGML_BACKEND_API int  ggml_backend_cuda_fionda_vram_alloc(void ** out_ptr, size_t size, int device);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_vram_free(void * ptr);
-GGML_BACKEND_API int  ggml_backend_cuda_fionda_stream_create(void ** out_stream);
+GGML_BACKEND_API int  ggml_backend_cuda_fionda_stream_create(void ** out_stream, int device);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_stream_destroy(void * stream);
-GGML_BACKEND_API int  ggml_backend_cuda_fionda_event_create(void ** out_event);
+GGML_BACKEND_API int  ggml_backend_cuda_fionda_event_create(void ** out_event, int device);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_event_destroy(void * event);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_memcpy_async(void * dst, const void * src, size_t size, void * stream);
 GGML_BACKEND_API void ggml_backend_cuda_fionda_event_record(void * event, void * stream);
@@ -56,7 +56,7 @@ GGML_BACKEND_API void ggml_backend_cuda_fionda_compute_event_record(ggml_backend
 GGML_BACKEND_API void ggml_backend_cuda_fionda_stream_wait_event(void * stream, void * event);
 
 // fionda profiling API
-GGML_BACKEND_API int   ggml_backend_cuda_fionda_event_create_timing(void ** out_event);
+GGML_BACKEND_API int   ggml_backend_cuda_fionda_event_create_timing(void ** out_event, int device);
 GGML_BACKEND_API float ggml_backend_cuda_fionda_event_elapsed_ms(void * start, void * end);
 GGML_BACKEND_API void  ggml_backend_cuda_fionda_synchronize_device(void);
 
