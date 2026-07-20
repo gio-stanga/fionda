@@ -18,13 +18,11 @@ To download the models, visit https://huggingface.co/ and download [Meta Llama 3
 
 Speculation needs a **draft model** matched to a specific target. We provide one for **Meta Llama 3.1 8B Instruct** only; the other two models are benchmarked without speculation. It uses ~160 MB of VRAM (its `lm_head` is shared with the target).
 
-Generate it from the EAGLE checkpoint ([yuhuili/EAGLE-LLaMA3.1-Instruct-8B](https://huggingface.co/yuhuili/EAGLE-LLaMA3.1-Instruct-8B)):
+Visit [yuhuili/EAGLE-LLaMA3.1-Instruct-8B](https://huggingface.co/yuhuili/EAGLE-LLaMA3.1-Instruct-8B/tree/main) and download all files into `models/EAGLE-LLaMA3.1-Instruct-8B`.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install torch gguf numpy sentencepiece
-
-hf download yuhuili/EAGLE-LLaMA3.1-Instruct-8B --local-dir models/EAGLE-LLaMA3.1-Instruct-8B
 
 # needs the base GGUF for tokenizer metadata; build the project first (step 2) so llama-quantize exists
 python scripts/fionda/convert_eagle1_to_gguf.py \

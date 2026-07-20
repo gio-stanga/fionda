@@ -1,605 +1,3 @@
-diff --git a/README.md b/README.md
-deleted file mode 100644
-index be23abcea..000000000
---- a/README.md
-+++ /dev/null
-@@ -1,596 +0,0 @@
--# llama.cpp
--
--![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
--
--[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
--[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
--[![Server](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
--
--[Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
--
--LLM inference in C/C++
--
--## Recent API changes
--
--- [Changelog for `libllama` API](https://github.com/ggml-org/llama.cpp/issues/9289)
--- [Changelog for `llama-server` REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
--
--## Hot topics
--
--- **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
--- **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
--- [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
--- [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
--- Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)
--- Multimodal support arrived in `llama-server`: [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) | [documentation](./docs/multimodal.md)
--- VS Code extension for FIM completions: https://github.com/ggml-org/llama.vscode
--- Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
--- Hugging Face Inference Endpoints now support GGUF out of the box! https://github.com/ggml-org/llama.cpp/discussions/9669
--- Hugging Face GGUF editor: [discussion](https://github.com/ggml-org/llama.cpp/discussions/9268) | [tool](https://huggingface.co/spaces/CISCai/gguf-editor)
--
------
--
--## Quick start
--
--Getting started with llama.cpp is straightforward. Here are several ways to install it on your machine:
--
--- Install `llama.cpp` using [brew, nix or winget](docs/install.md)
--- Run with Docker - see our [Docker documentation](docs/docker.md)
--- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
--- Build from source by cloning this repository - check out [our build guide](docs/build.md)
--
--Once installed, you'll need a model to work with. Head to the [Obtaining and quantizing models](#obtaining-and-quantizing-models) section to learn more.
--
--Example command:
--
--```sh
--# Use a local model file
--llama-cli -m my_model.gguf
--
--# Or download and run a model directly from Hugging Face
--llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
--
--# Launch OpenAI-compatible API server
--llama-server -hf ggml-org/gemma-3-1b-it-GGUF
--```
--
--## Description
--
--The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
--range of hardware - locally and in the cloud.
--
--- Plain C/C++ implementation without any dependencies
--- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
--- AVX, AVX2, AVX512 and AMX support for x86 architectures
--- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
--- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
--- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
--- Vulkan and SYCL backend support
--- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
--
--The `llama.cpp` project is the main playground for developing new features for the [ggml](https://github.com/ggml-org/ggml) library.
--
--<details>
--<summary>Models</summary>
--
--Typically finetunes of the base models below are supported as well.
--
--Instructions for adding support for new models: [HOWTO-add-model.md](docs/development/HOWTO-add-model.md)
--
--#### Text-only
--
--- [X] LLaMA 🦙
--- [x] LLaMA 2 🦙🦙
--- [x] LLaMA 3 🦙🦙🦙
--- [X] [Mistral 7B](https://huggingface.co/mistralai/Mistral-7B-v0.1)
--- [x] [Mixtral MoE](https://huggingface.co/models?search=mistral-ai/Mixtral)
--- [x] [DBRX](https://huggingface.co/databricks/dbrx-instruct)
--- [x] [Jamba](https://huggingface.co/ai21labs)
--- [X] [Falcon](https://huggingface.co/models?search=tiiuae/falcon)
--- [X] [Chinese LLaMA / Alpaca](https://github.com/ymcui/Chinese-LLaMA-Alpaca) and [Chinese LLaMA-2 / Alpaca-2](https://github.com/ymcui/Chinese-LLaMA-Alpaca-2)
--- [X] [Vigogne (French)](https://github.com/bofenghuang/vigogne)
--- [X] [BERT](https://github.com/ggml-org/llama.cpp/pull/5423)
--- [X] [Koala](https://bair.berkeley.edu/blog/2023/04/03/koala/)
--- [X] [Baichuan 1 & 2](https://huggingface.co/models?search=baichuan-inc/Baichuan) + [derivations](https://huggingface.co/hiyouga/baichuan-7b-sft)
--- [X] [Aquila 1 & 2](https://huggingface.co/models?search=BAAI/Aquila)
--- [X] [Starcoder models](https://github.com/ggml-org/llama.cpp/pull/3187)
--- [X] [Refact](https://huggingface.co/smallcloudai/Refact-1_6B-fim)
--- [X] [MPT](https://github.com/ggml-org/llama.cpp/pull/3417)
--- [X] [Bloom](https://github.com/ggml-org/llama.cpp/pull/3553)
--- [x] [Yi models](https://huggingface.co/models?search=01-ai/Yi)
--- [X] [StableLM models](https://huggingface.co/stabilityai)
--- [x] [Deepseek models](https://huggingface.co/models?search=deepseek-ai/deepseek)
--- [x] [Qwen models](https://huggingface.co/models?search=Qwen/Qwen)
--- [x] [PLaMo-13B](https://github.com/ggml-org/llama.cpp/pull/3557)
--- [x] [Phi models](https://huggingface.co/models?search=microsoft/phi)
--- [x] [PhiMoE](https://github.com/ggml-org/llama.cpp/pull/11003)
--- [x] [GPT-2](https://huggingface.co/gpt2)
--- [x] [Orion 14B](https://github.com/ggml-org/llama.cpp/pull/5118)
--- [x] [InternLM2](https://huggingface.co/models?search=internlm2)
--- [x] [CodeShell](https://github.com/WisdomShell/codeshell)
--- [x] [Gemma](https://ai.google.dev/gemma)
--- [x] [Mamba](https://github.com/state-spaces/mamba)
--- [x] [Grok-1](https://huggingface.co/keyfan/grok-1-hf)
--- [x] [Xverse](https://huggingface.co/models?search=xverse)
--- [x] [Command-R models](https://huggingface.co/models?search=CohereForAI/c4ai-command-r)
--- [x] [SEA-LION](https://huggingface.co/models?search=sea-lion)
--- [x] [GritLM-7B](https://huggingface.co/GritLM/GritLM-7B) + [GritLM-8x7B](https://huggingface.co/GritLM/GritLM-8x7B)
--- [x] [OLMo](https://allenai.org/olmo)
--- [x] [OLMo 2](https://allenai.org/olmo)
--- [x] [OLMoE](https://huggingface.co/allenai/OLMoE-1B-7B-0924)
--- [x] [Granite models](https://huggingface.co/collections/ibm-granite/granite-code-models-6624c5cec322e4c148c8b330)
--- [x] [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) + [Pythia](https://github.com/EleutherAI/pythia)
--- [x] [Snowflake-Arctic MoE](https://huggingface.co/collections/Snowflake/arctic-66290090abe542894a5ac520)
--- [x] [Smaug](https://huggingface.co/models?search=Smaug)
--- [x] [Poro 34B](https://huggingface.co/LumiOpen/Poro-34B)
--- [x] [Bitnet b1.58 models](https://huggingface.co/1bitLLM)
--- [x] [Flan T5](https://huggingface.co/models?search=flan-t5)
--- [x] [Open Elm models](https://huggingface.co/collections/apple/openelm-instruct-models-6619ad295d7ae9f868b759ca)
--- [x] [ChatGLM3-6b](https://huggingface.co/THUDM/chatglm3-6b) + [ChatGLM4-9b](https://huggingface.co/THUDM/glm-4-9b) + [GLMEdge-1.5b](https://huggingface.co/THUDM/glm-edge-1.5b-chat) + [GLMEdge-4b](https://huggingface.co/THUDM/glm-edge-4b-chat)
--- [x] [GLM-4-0414](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e)
--- [x] [SmolLM](https://huggingface.co/collections/HuggingFaceTB/smollm-6695016cad7167254ce15966)
--- [x] [EXAONE-3.0-7.8B-Instruct](https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct)
--- [x] [FalconMamba Models](https://huggingface.co/collections/tiiuae/falconmamba-7b-66b9a580324dd1598b0f6d4a)
--- [x] [Jais](https://huggingface.co/inceptionai/jais-13b-chat)
--- [x] [Bielik-11B-v2.3](https://huggingface.co/collections/speakleash/bielik-11b-v23-66ee813238d9b526a072408a)
--- [x] [RWKV-7](https://huggingface.co/collections/shoumenchougou/rwkv7-gxx-gguf)
--- [x] [RWKV-6](https://github.com/BlinkDL/RWKV-LM)
--- [x] [QRWKV-6](https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1)
--- [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
--- [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
--- [x] [Ling models](https://huggingface.co/collections/inclusionAI/ling-67c51c85b34a7ea0aba94c32)
--- [x] [LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2-686d721927015b2ad73eaa38)
--- [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
--- [x] [BailingMoeV2 (Ring/Ling 2.0) models](https://huggingface.co/collections/inclusionAI/ling-v2-68bf1dd2fc34c306c1fa6f86)
--
--#### Multimodal
--
--- [x] [LLaVA 1.5 models](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [LLaVA 1.6 models](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
--- [x] [BakLLaVA](https://huggingface.co/models?search=SkunkworksAI/Bakllava)
--- [x] [Obsidian](https://huggingface.co/NousResearch/Obsidian-3B-V0.5)
--- [x] [ShareGPT4V](https://huggingface.co/models?search=Lin-Chen/ShareGPT4V)
--- [x] [MobileVLM 1.7B/3B models](https://huggingface.co/models?search=mobileVLM)
--- [x] [Yi-VL](https://huggingface.co/models?search=Yi-VL)
--- [x] [Mini CPM](https://huggingface.co/models?search=MiniCPM)
--- [x] [Moondream](https://huggingface.co/vikhyatk/moondream2)
--- [x] [Bunny](https://github.com/BAAI-DCAI/Bunny)
--- [x] [GLM-EDGE](https://huggingface.co/models?search=glm-edge)
--- [x] [Qwen2-VL](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d)
--- [x] [LFM2-VL](https://huggingface.co/collections/LiquidAI/lfm2-vl-68963bbc84a610f7638d5ffa)
--
--</details>
--
--<details>
--<summary>Bindings</summary>
--
--- Python: [ddh0/easy-llama](https://github.com/ddh0/easy-llama)
--- Python: [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
--- Go: [go-skynet/go-llama.cpp](https://github.com/go-skynet/go-llama.cpp)
--- Node.js: [withcatai/node-llama-cpp](https://github.com/withcatai/node-llama-cpp)
--- JS/TS (llama.cpp server client): [lgrammel/modelfusion](https://modelfusion.dev/integration/model-provider/llamacpp)
--- JS/TS (Programmable Prompt Engine CLI): [offline-ai/cli](https://github.com/offline-ai/cli)
--- JavaScript/Wasm (works in browser): [tangledgroup/llama-cpp-wasm](https://github.com/tangledgroup/llama-cpp-wasm)
--- Typescript/Wasm (nicer API, available on npm): [ngxson/wllama](https://github.com/ngxson/wllama)
--- Ruby: [yoshoku/llama_cpp.rb](https://github.com/yoshoku/llama_cpp.rb)
--- Rust (more features): [edgenai/llama_cpp-rs](https://github.com/edgenai/llama_cpp-rs)
--- Rust (nicer API): [mdrokz/rust-llama.cpp](https://github.com/mdrokz/rust-llama.cpp)
--- Rust (more direct bindings): [utilityai/llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
--- Rust (automated build from crates.io): [ShelbyJenkins/llm_client](https://github.com/ShelbyJenkins/llm_client)
--- C#/.NET: [SciSharp/LLamaSharp](https://github.com/SciSharp/LLamaSharp)
--- C#/VB.NET (more features - community license): [LM-Kit.NET](https://docs.lm-kit.com/lm-kit-net/index.html)
--- Scala 3: [donderom/llm4s](https://github.com/donderom/llm4s)
--- Clojure: [phronmophobic/llama.clj](https://github.com/phronmophobic/llama.clj)
--- React Native: [mybigday/llama.rn](https://github.com/mybigday/llama.rn)
--- Java: [kherud/java-llama.cpp](https://github.com/kherud/java-llama.cpp)
--- Java: [QuasarByte/llama-cpp-jna](https://github.com/QuasarByte/llama-cpp-jna)
--- Zig: [deins/llama.cpp.zig](https://github.com/Deins/llama.cpp.zig)
--- Flutter/Dart: [netdur/llama_cpp_dart](https://github.com/netdur/llama_cpp_dart)
--- Flutter: [xuegao-tzx/Fllama](https://github.com/xuegao-tzx/Fllama)
--- PHP (API bindings and features built on top of llama.cpp): [distantmagic/resonance](https://github.com/distantmagic/resonance) [(more info)](https://github.com/ggml-org/llama.cpp/pull/6326)
--- Guile Scheme: [guile_llama_cpp](https://savannah.nongnu.org/projects/guile-llama-cpp)
--- Swift [srgtuszy/llama-cpp-swift](https://github.com/srgtuszy/llama-cpp-swift)
--- Swift [ShenghaiWang/SwiftLlama](https://github.com/ShenghaiWang/SwiftLlama)
--- Delphi [Embarcadero/llama-cpp-delphi](https://github.com/Embarcadero/llama-cpp-delphi)
--- Go (no CGo needed): [hybridgroup/yzma](https://github.com/hybridgroup/yzma)
--- Android: [llama.android](/examples/llama.android)
--
--</details>
--
--<details>
--<summary>UIs</summary>
--
--*(to have a project listed here, it should clearly state that it depends on `llama.cpp`)*
--
--- [AI Sublime Text plugin](https://github.com/yaroslavyaroslav/OpenAI-sublime-text) (MIT)
--- [BonzAI App](https://apps.apple.com/us/app/bonzai-your-local-ai-agent/id6752847988) (proprietary)
--- [cztomsik/ava](https://github.com/cztomsik/ava) (MIT)
--- [Dot](https://github.com/alexpinel/Dot) (GPL)
--- [eva](https://github.com/ylsdamxssjxxdd/eva) (MIT)
--- [iohub/collama](https://github.com/iohub/coLLaMA) (Apache-2.0)
--- [janhq/jan](https://github.com/janhq/jan) (AGPL)
--- [johnbean393/Sidekick](https://github.com/johnbean393/Sidekick) (MIT)
--- [KanTV](https://github.com/zhouwg/kantv?tab=readme-ov-file) (Apache-2.0)
--- [KodiBot](https://github.com/firatkiral/kodibot) (GPL)
--- [llama.vim](https://github.com/ggml-org/llama.vim) (MIT)
--- [LARS](https://github.com/abgulati/LARS) (AGPL)
--- [Llama Assistant](https://github.com/vietanhdev/llama-assistant) (GPL)
--- [LlamaLib](https://github.com/undreamai/LlamaLib) (Apache-2.0)
--- [LLMFarm](https://github.com/guinmoon/LLMFarm?tab=readme-ov-file) (MIT)
--- [LLMUnity](https://github.com/undreamai/LLMUnity) (MIT)
--- [LMStudio](https://lmstudio.ai/) (proprietary)
--- [LocalAI](https://github.com/mudler/LocalAI) (MIT)
--- [LostRuins/koboldcpp](https://github.com/LostRuins/koboldcpp) (AGPL)
--- [MindMac](https://mindmac.app) (proprietary)
--- [MindWorkAI/AI-Studio](https://github.com/MindWorkAI/AI-Studio) (FSL-1.1-MIT)
--- [Mobile-Artificial-Intelligence/maid](https://github.com/Mobile-Artificial-Intelligence/maid) (MIT)
--- [Mozilla-Ocho/llamafile](https://github.com/Mozilla-Ocho/llamafile) (Apache-2.0)
--- [nat/openplayground](https://github.com/nat/openplayground) (MIT)
--- [nomic-ai/gpt4all](https://github.com/nomic-ai/gpt4all) (MIT)
--- [ollama/ollama](https://github.com/ollama/ollama) (MIT)
--- [oobabooga/text-generation-webui](https://github.com/oobabooga/text-generation-webui) (AGPL)
--- [PocketPal AI](https://github.com/a-ghorbani/pocketpal-ai) (MIT)
--- [psugihara/FreeChat](https://github.com/psugihara/FreeChat) (MIT)
--- [ptsochantaris/emeltal](https://github.com/ptsochantaris/emeltal) (MIT)
--- [pythops/tenere](https://github.com/pythops/tenere) (AGPL)
--- [ramalama](https://github.com/containers/ramalama) (MIT)
--- [semperai/amica](https://github.com/semperai/amica) (MIT)
--- [withcatai/catai](https://github.com/withcatai/catai) (MIT)
--- [Autopen](https://github.com/blackhole89/autopen) (GPL)
--
--</details>
--
--<details>
--<summary>Tools</summary>
--
--- [akx/ggify](https://github.com/akx/ggify) – download PyTorch models from Hugging Face Hub and convert them to GGML
--- [akx/ollama-dl](https://github.com/akx/ollama-dl) – download models from the Ollama library to be used directly with llama.cpp
--- [crashr/gppm](https://github.com/crashr/gppm) – launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
--- [gpustack/gguf-parser](https://github.com/gpustack/gguf-parser-go/tree/main/cmd/gguf-parser) - review/check the GGUF file and estimate the memory usage
--- [Styled Lines](https://marketplace.unity.com/packages/tools/generative-ai/styled-lines-llama-cpp-model-292902) (proprietary licensed, async wrapper of inference part for game development in Unity3d with pre-built Mobile and Web platform wrappers and a model example)
--- [unslothai/unsloth](https://github.com/unslothai/unsloth) – 🦥 exports/saves fine-tuned and trained models to GGUF (Apache-2.0)
--
--</details>
--
--<details>
--<summary>Infrastructure</summary>
--
--- [Paddler](https://github.com/intentee/paddler) - Open-source LLMOps platform for hosting and scaling AI in your own infrastructure
--- [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
--- [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
--- [llama-swap](https://github.com/mostlygeek/llama-swap) - transparent proxy that adds automatic model switching with llama-server
--- [Kalavai](https://github.com/kalavai-net/kalavai-client) - Crowdsource end to end LLM deployment at any scale
--- [llmaz](https://github.com/InftyAI/llmaz) - ☸️ Easy, advanced inference platform for large language models on Kubernetes.
--- [LLMKube](https://github.com/defilantech/llmkube) - Kubernetes operator for llama.cpp with multi-GPU and Apple Silicon Metal
--  support"
--</details>
--
--<details>
--<summary>Games</summary>
--
--- [Lucy's Labyrinth](https://github.com/MorganRO8/Lucys_Labyrinth) - A simple maze game where agents controlled by an AI model will try to trick you.
--
--</details>
--
--
--## Supported backends
--
--| Backend | Target devices |
--| --- | --- |
--| [Metal](docs/build.md#metal-build) | Apple Silicon |
--| [BLAS](docs/build.md#blas-build) | All |
--| [BLIS](docs/backend/BLIS.md) | All |
--| [SYCL](docs/backend/SYCL.md) | Intel and Nvidia GPU |
--| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
--| [MUSA](docs/build.md#musa) | Moore Threads GPU |
--| [CUDA](docs/build.md#cuda) | Nvidia GPU |
--| [HIP](docs/build.md#hip) | AMD GPU |
--| [ZenDNN](docs/build.md#zendnn) | AMD CPU |
--| [Vulkan](docs/build.md#vulkan) | GPU |
--| [CANN](docs/build.md#cann) | Ascend NPU |
--| [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
--| [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
--| [WebGPU [In Progress]](docs/build.md#webgpu) | All |
--| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
--| [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
--| [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
--
--## Obtaining and quantizing models
--
--The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](https://huggingface.co/models?library=gguf&sort=trending) compatible with `llama.cpp`:
--
--- [Trending](https://huggingface.co/models?library=gguf&sort=trending)
--- [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
--
--You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
--
--```sh
--llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
--```
--
--By default, the CLI would download from Hugging Face, you can switch to other options with the environment variable `MODEL_ENDPOINT`. The `MODEL_ENDPOINT` must point to a Hugging Face compatible API endpoint.
--
--After downloading a model, use the CLI tools to run it locally - see below.
--
--`llama.cpp` requires the model to be stored in the [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) file format. Models in other data formats can be converted to GGUF using the `convert_*.py` Python scripts in this repo.
--
--The Hugging Face platform provides a variety of online tools for converting, quantizing and hosting models with `llama.cpp`:
--
--- Use the [GGUF-my-repo space](https://huggingface.co/spaces/ggml-org/gguf-my-repo) to convert to GGUF format and quantize model weights to smaller sizes
--- Use the [GGUF-my-LoRA space](https://huggingface.co/spaces/ggml-org/gguf-my-lora) to convert LoRA adapters to GGUF format (more info: https://github.com/ggml-org/llama.cpp/discussions/10123)
--- Use the [GGUF-editor space](https://huggingface.co/spaces/CISCai/gguf-editor) to edit GGUF meta data in the browser (more info: https://github.com/ggml-org/llama.cpp/discussions/9268)
--- Use the [Inference Endpoints](https://ui.endpoints.huggingface.co/) to directly host `llama.cpp` in the cloud (more info: https://github.com/ggml-org/llama.cpp/discussions/9669)
--
--To learn more about model quantization, [read this documentation](tools/quantize/README.md)
--
--## [`llama-cli`](tools/cli)
--
--#### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
--
--- <details open>
--    <summary>Run in conversation mode</summary>
--
--    Models with a built-in chat template will automatically activate conversation mode. If this doesn't occur, you can manually enable it by adding `-cnv` and specifying a suitable chat template with `--chat-template NAME`
--
--    ```bash
--    llama-cli -m model.gguf
--
--    # > hi, who are you?
--    # Hi there! I'm your helpful assistant! I'm an AI-powered chatbot designed to assist and provide information to users like you. I'm here to help answer your questions, provide guidance, and offer support on a wide range of topics. I'm a friendly and knowledgeable AI, and I'm always happy to help with anything you need. What's on your mind, and how can I assist you today?
--    #
--    # > what is 1+1?
--    # Easy peasy! The answer to 1+1 is... 2!
--    ```
--
--    </details>
--
--- <details>
--    <summary>Run in conversation mode with custom chat template</summary>
--
--    ```bash
--    # use the "chatml" template (use -h to see the list of supported templates)
--    llama-cli -m model.gguf -cnv --chat-template chatml
--
--    # use a custom template
--    llama-cli -m model.gguf -cnv --in-prefix 'User: ' --reverse-prompt 'User:'
--    ```
--
--    </details>
--
--- <details>
--    <summary>Constrain the output with a custom grammar</summary>
--
--    ```bash
--    llama-cli -m model.gguf -n 256 --grammar-file grammars/json.gbnf -p 'Request: schedule a call at 8pm; Command:'
--
--    # {"appointmentTime": "8pm", "appointmentDetails": "schedule a a call"}
--    ```
--
--    The [grammars/](grammars/) folder contains a handful of sample grammars. To write your own, check out the [GBNF Guide](grammars/README.md).
--
--    For authoring more complex JSON grammars, check out https://grammar.intrinsiclabs.ai/
--
--    </details>
--
--
--## [`llama-server`](tools/server)
--
--#### A lightweight, [OpenAI API](https://github.com/openai/openai-openapi) compatible, HTTP server for serving LLMs.
--
--- <details open>
--    <summary>Start a local HTTP server with default configuration on port 8080</summary>
--
--    ```bash
--    llama-server -m model.gguf --port 8080
--
--    # Basic web UI can be accessed via browser: http://localhost:8080
--    # Chat completion endpoint: http://localhost:8080/v1/chat/completions
--    ```
--
--    </details>
--
--- <details>
--    <summary>Support multiple-users and parallel decoding</summary>
--
--    ```bash
--    # up to 4 concurrent requests, each with 4096 max context
--    llama-server -m model.gguf -c 16384 -np 4
--    ```
--
--    </details>
--
--- <details>
--    <summary>Enable speculative decoding</summary>
--
--    ```bash
--    # the draft.gguf model should be a small variant of the target model.gguf
--    llama-server -m model.gguf -md draft.gguf
--    ```
--
--    </details>
--
--- <details>
--    <summary>Serve an embedding model</summary>
--
--    ```bash
--    # use the /embedding endpoint
--    llama-server -m model.gguf --embedding --pooling cls -ub 8192
--    ```
--
--    </details>
--
--- <details>
--    <summary>Serve a reranking model</summary>
--
--    ```bash
--    # use the /reranking endpoint
--    llama-server -m model.gguf --reranking
--    ```
--
--    </details>
--
--- <details>
--    <summary>Constrain all outputs with a grammar</summary>
--
--    ```bash
--    # custom grammar
--    llama-server -m model.gguf --grammar-file grammar.gbnf
--
--    # JSON
--    llama-server -m model.gguf --grammar-file grammars/json.gbnf
--    ```
--
--    </details>
--
--
--## [`llama-perplexity`](tools/perplexity)
--
--#### A tool for measuring the [perplexity](tools/perplexity/README.md) [^1] (and other quality metrics) of a model over a given text.
--
--- <details open>
--    <summary>Measure the perplexity over a text file</summary>
--
--    ```bash
--    llama-perplexity -m model.gguf -f file.txt
--
--    # [1]15.2701,[2]5.4007,[3]5.3073,[4]6.2965,[5]5.8940,[6]5.6096,[7]5.7942,[8]4.9297, ...
--    # Final estimate: PPL = 5.4007 +/- 0.67339
--    ```
--
--    </details>
--
--- <details>
--    <summary>Measure KL divergence</summary>
--
--    ```bash
--    # TODO
--    ```
--
--    </details>
--
--[^1]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
--
--## [`llama-bench`](tools/llama-bench)
--
--#### Benchmark the performance of the inference for various parameters.
--
--- <details open>
--    <summary>Run default benchmark</summary>
--
--    ```bash
--    llama-bench -m model.gguf
--
--    # Output:
--    # | model               |       size |     params | backend    | threads |          test |                  t/s |
--    # | ------------------- | ---------: | ---------: | ---------- | ------: | ------------: | -------------------: |
--    # | qwen2 1.5B Q4_0     | 885.97 MiB |     1.54 B | Metal,BLAS |      16 |         pp512 |      5765.41 ± 20.55 |
--    # | qwen2 1.5B Q4_0     | 885.97 MiB |     1.54 B | Metal,BLAS |      16 |         tg128 |        197.71 ± 0.81 |
--    #
--    # build: 3e0ba0e60 (4229)
--    ```
--
--    </details>
--
--## [`llama-simple`](examples/simple)
--
--#### A minimal example for implementing apps with `llama.cpp`. Useful for developers.
--
--- <details>
--    <summary>Basic text completion</summary>
--
--    ```bash
--    llama-simple -m model.gguf
--
--    # Hello my name is Kaitlyn and I am a 16 year old girl. I am a junior in high school and I am currently taking a class called "The Art of
--    ```
--
--    </details>
--
--
--## Contributing
--
--- Contributors can open PRs
--- Collaborators will be invited based on contributions
--- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
--- Any help with managing issues, PRs and projects is very appreciated!
--- See [good first issues](https://github.com/ggml-org/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
--- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
--- Make sure to read this: [Inference at the edge](https://github.com/ggml-org/llama.cpp/discussions/205)
--- A bit of backstory for those who are interested: [Changelog podcast](https://changelog.com/podcast/532)
--
--## Other documentation
--
--- [cli](tools/cli/README.md)
--- [completion](tools/completion/README.md)
--- [server](tools/server/README.md)
--- [GBNF grammars](grammars/README.md)
--
--#### Development documentation
--
--- [How to build](docs/build.md)
--- [Running on Docker](docs/docker.md)
--- [Build on Android](docs/android.md)
--- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
--- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
--
--#### Seminal papers and background on the models
--
--If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
--- LLaMA:
--    - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
--    - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
--- GPT-3
--    - [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)
--- GPT-3.5 / InstructGPT / ChatGPT:
--    - [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
--    - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
--
--## XCFramework
--The XCFramework is a precompiled version of the library for iOS, visionOS, tvOS,
--and macOS. It can be used in Swift projects without the need to compile the
--library from source. For example:
--```swift
--// swift-tools-version: 5.10
--// The swift-tools-version declares the minimum version of Swift required to build this package.
--
--import PackageDescription
--
--let package = Package(
--    name: "MyLlamaPackage",
--    targets: [
--        .executableTarget(
--            name: "MyLlamaPackage",
--            dependencies: [
--                "LlamaFramework"
--            ]),
--        .binaryTarget(
--            name: "LlamaFramework",
--            url: "https://github.com/ggml-org/llama.cpp/releases/download/b5046/llama-b5046-xcframework.zip",
--            checksum: "c19be78b5f00d8d29a25da41042cb7afa094cbf6280a225abe614b03b20029ab"
--        )
--    ]
--)
--```
--The above example is using an intermediate build `b5046` of the library. This can be modified
--to use a different version by changing the URL and checksum.
--
--## Completions
--Command-line completion is available for some environments.
--
--#### Bash Completion
--```bash
--$ build/bin/llama-cli --completion-bash > ~/.llama-completion.bash
--$ source ~/.llama-completion.bash
--```
--Optionally this can be added to your `.bashrc` or `.bash_profile` to load it
--automatically. For example:
--```console
--$ echo "source ~/.llama-completion.bash" >> ~/.bashrc
--```
--
--## Dependencies
--
--- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
--- [stb-image](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
--- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
--- [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
--- [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
 diff --git a/common/common.h b/common/common.h
 index c17e55383..d44cdbc49 100644
 --- a/common/common.h
@@ -618,7 +16,7 @@ index 3e68c38e4..f9656f1ce 100644
 +++ b/common/speculative.cpp
 @@ -10,6 +10,7 @@
  #include "sampling.h"
- 
+
  #include <algorithm>
 +#include <cmath>
  #include <cstring>
@@ -643,7 +41,7 @@ index 3e68c38e4..f9656f1ce 100644
 @@ -462,6 +465,237 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
      }
  };
- 
+
 +// EAGLE1: the draft model is a single llama-style layer that predicts the next token from
 +// the target model's hidden states (see .fionda_context/eagle.md).
 +//
@@ -888,7 +286,7 @@ index 3e68c38e4..f9656f1ce 100644
          case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
 @@ -835,12 +1070,32 @@ done:
  }
- 
+
  // initialization of the speculative decoding system
 -//
  common_speculative * common_speculative_init(
@@ -928,7 +326,7 @@ index 3e68c38e4..f9656f1ce 100644
 +        bool has_draft = !params.mparams_dft.path.empty() && !is_eagle1;
 +        bool has_draft_eagle1 = is_eagle1;
          bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
- 
+
          bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
 @@ -895,6 +1151,9 @@ common_speculative * common_speculative_init(
          if (has_draft) {
@@ -965,7 +363,7 @@ index a03dbce88..f707096cf 100644
 @@ -64,6 +64,9 @@ int main(int argc, char ** argv) {
          params_dft.model        = params_spec.mparams_dft;
          params_dft.n_gpu_layers = params_spec.n_gpu_layers;
- 
+
 +        // the draft model always lives fully in VRAM - never streamed by fionda
 +        params_dft.fionda_mode  = false;
 +
@@ -973,7 +371,7 @@ index a03dbce88..f707096cf 100644
              params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
              params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
 @@ -81,6 +84,20 @@ int main(int argc, char ** argv) {
- 
+
          params.speculative.model_dft = model_dft.get();
          params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
 +
@@ -991,7 +389,7 @@ index a03dbce88..f707096cf 100644
 +            llama_set_embeddings(ctx_tgt, true);
 +        }
      }
- 
+
      // Tokenize the prompt
 diff --git a/examples/speculative/speculative.cpp b/examples/speculative/speculative.cpp
 index 8f56a659b..5e898f772 100644
@@ -1000,12 +398,12 @@ index 8f56a659b..5e898f772 100644
 @@ -90,6 +90,9 @@ int main(int argc, char ** argv) {
      params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
      params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
- 
+
 +    // the draft model always lives fully in VRAM - never streamed by fionda
 +    params.fionda_mode = false;
 +
      auto llama_init_dft = common_init_from_params(params);
- 
+
      model_dft = llama_init_dft->model();
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
 index 500457f07..72eea16fd 100644
@@ -1016,7 +414,7 @@ index 500457f07..72eea16fd 100644
          ggml_fionda_compute_event_record_t compute_event_record_cb; // record event on the backend compute stream
          ggml_fionda_stream_wait_event_t    stream_wait_event_cb;    // make a given stream wait on event
 -
-+        
++
          // Profiling state
          void * profile_dma_start[128];
          void * profile_dma_end[128];
@@ -1027,7 +425,7 @@ index f706b45e7..57b0a6cc7 100644
 @@ -983,6 +983,25 @@ extern "C" {
      // TODO: rename to avoid confusion with llama_get_embeddings()
      LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
- 
+
 +    // EAGLE1 draft models: set the per-position hidden states of the target model that the
 +    // draft graph consumes as an extra input. rows are gathered by absolute sequence position:
 +    // row i of data corresponds to position pos_base + i. valid for subsequent decodes until
@@ -1238,7 +636,7 @@ index e210dcdae..ccd26ae09 100644
 +    { LLM_ARCH_EAGLE,            "eagle"            },
      { LLM_ARCH_UNKNOWN,          "(unknown)"        },
  };
- 
+
 @@ -448,6 +449,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
      { LLM_TENSOR_NEXTN_HNORM,                            "blk.%d.nextn.hnorm" },
      { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,                 "blk.%d.nextn.shared_head_head" },
@@ -1278,7 +676,7 @@ index e210dcdae..ccd26ae09 100644
 +    // EAGLE1 draft
 +    {LLM_TENSOR_FC,                         {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
  };
- 
+
  LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
 diff --git a/src/llama-arch.h b/src/llama-arch.h
 index 1b8737b74..96876f35b 100644
@@ -1291,14 +689,14 @@ index 1b8737b74..96876f35b 100644
 +    LLM_ARCH_EAGLE,
      LLM_ARCH_UNKNOWN,
  };
- 
+
 @@ -552,6 +553,7 @@ enum llm_tensor {
      LLM_TENSOR_NEXTN_HNORM,
      LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
      LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
 +    LLM_TENSOR_FC, // EAGLE1 draft: projects concat(token_embd, target hidden state) -> n_embd
  };
- 
+
  enum llm_tensor_layer {
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
 index e99248f43..feb31876e 100644
@@ -1307,7 +705,7 @@ index e99248f43..feb31876e 100644
 @@ -1067,6 +1067,19 @@ void llama_context::set_embeddings(bool value) {
      //sched_need_reserve = true;
  }
- 
+
 +// saves the target's hidden states so the next decode can use them.
 +// pos_base is the position that row 0 belongs to; set_input() later matches each token to
 +// its row by position. works for a single sequence only.
@@ -1323,7 +721,7 @@ index e99248f43..feb31876e 100644
 +
  void llama_context::set_causal_attn(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
- 
+
 @@ -2200,6 +2213,7 @@ llm_graph_params llama_context::graph_params(
          /*.loras       =*/ loras.get(),
          /*.mctx        =*/ mctx,
@@ -1335,7 +733,7 @@ index e99248f43..feb31876e 100644
 @@ -3094,6 +3108,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
      ctx->set_abort_callback(abort_callback, abort_callback_data);
  }
- 
+
 +void llama_set_eagle_hidden(llama_context * ctx, const float * data, int32_t n_tokens, llama_pos pos_base) {
 +    ctx->set_eagle_hidden(data, n_tokens, pos_base);
 +}
@@ -1348,23 +746,23 @@ index e0d0085c1..722924f17 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -103,6 +103,9 @@ struct llama_context {
- 
+
      void set_embeddings (bool value);
      void set_causal_attn(bool value);
 +
 +    // EAGLE1 draft: set per-position hidden states for subsequent decodes
 +    void set_eagle_hidden(const float * data, int32_t n_tokens, llama_pos pos_base);
      void set_warmup(bool value);
- 
+
      void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 @@ -263,6 +266,8 @@ private:
- 
+
      llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
- 
+
 +    llama_eagle_hidden eagle_hid; // EAGLE1 draft: hidden states from the target model
 +
      std::unique_ptr<llama_memory_i> memory;
- 
+
      // decode output (2-dimensional array: [n_outputs][n_vocab])
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
 index 0e7d96ca1..494a54a1f 100644
@@ -1373,7 +771,7 @@ index 0e7d96ca1..494a54a1f 100644
 @@ -342,6 +342,32 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
      }
  }
- 
+
 +void llm_graph_input_eagle_hidden::set_input(const llama_ubatch * ubatch) {
 +    if (!hidden || eagle_hid->data.empty()) {
 +        // no hidden states set (e.g. warmup/reserve pass) - leave the tensor as-is
@@ -1414,7 +812,7 @@ index 0e7d96ca1..494a54a1f 100644
 @@ -1785,6 +1812,24 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
      return cur;
  }
- 
+
 +
 +// creates the empty input tensor that will hold the target's hidden states.
 +// it gets filled in later, once per decode, by set_input() above.
@@ -1435,7 +833,7 @@ index 0e7d96ca1..494a54a1f 100644
 +
  ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
      auto inp = std::make_unique<llm_graph_input_pos_bucket>(hparams);
- 
+
 diff --git a/src/llama-graph.h b/src/llama-graph.h
 index bb0ad7519..dd5f62339 100644
 --- a/src/llama-graph.h
@@ -1443,7 +841,7 @@ index bb0ad7519..dd5f62339 100644
 @@ -72,6 +72,16 @@ struct llama_cross {
      std::vector<std::set<llama_seq_id>> seq_ids_enc;
  };
- 
+
 +// hidden states borrowed from the TARGET model, handed to the EAGLE1 draft as an extra input.
 +// the draft combines them with the token embeddings to make its prediction.
 +struct llama_eagle_hidden {
@@ -1455,12 +853,12 @@ index bb0ad7519..dd5f62339 100644
 +};
 +
  struct llm_graph_params;
- 
+
  //
 @@ -258,6 +268,19 @@ public:
      const llama_cross * cross;
  };
- 
+
 +class llm_graph_input_eagle_hidden : public llm_graph_input_i {
 +public:
 +    llm_graph_input_eagle_hidden(
@@ -1482,9 +880,9 @@ index bb0ad7519..dd5f62339 100644
      const llama_memory_context_i * mctx;
      const llama_cross            * cross;
 +    const llama_eagle_hidden     * eagle_hid;
- 
+
      std::map<llama_seq_id, llama_sampler *> samplers;
- 
+
 @@ -627,7 +651,8 @@ struct llm_graph_params {
              gtype == other.gtype &&
              cvec  == other.cvec  &&
@@ -1494,18 +892,18 @@ index bb0ad7519..dd5f62339 100644
 +            eagle_hid == other.eagle_hid;
      }
  };
- 
+
 @@ -749,6 +774,7 @@ struct llm_graph_context {
      const llama_adapter_loras    * loras;
      const llama_memory_context_i * mctx;
      const llama_cross            * cross;
 +    const llama_eagle_hidden     * eagle_hid;
- 
+
      std::map<llama_seq_id, llama_sampler *> samplers;
- 
+
 @@ -865,6 +891,7 @@ struct llm_graph_context {
      ggml_tensor * build_inp_cls() const;
- 
+
      ggml_tensor * build_inp_cross_embd() const;
 +    ggml_tensor * build_inp_eagle_hidden() const;
      ggml_tensor * build_inp_pos_bucket_enc() const;
@@ -1519,7 +917,7 @@ index 641291b38..70f30e778 100644
          void *       slot_consumed[2] = {};      // cudaEvent_t: the split reading slot N was dispatched
          int          cur_slot         = 0;       // slot currently being computed
          bool         initialized      = false;
--        
+-
 +
          // profiling state
          void *       profile_dma_start[128]     = {};
@@ -1528,7 +926,7 @@ index 641291b38..70f30e778 100644
          ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_consumed[0]);
          ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[1]);
          ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.slot_ready[0]);
--        
+-
 +
          for (int i = 0; i < 128; i++) {
              if (pimpl->fionda_vram.profile_dma_start[i]) ggml_backend_cuda_fionda_event_destroy(pimpl->fionda_vram.profile_dma_start[i]);
@@ -1537,11 +935,11 @@ index 641291b38..70f30e778 100644
      }
      fv.profile_block_cnt = 0;
      params.profile_block_cnt = &fv.profile_block_cnt;
--    
+-
 +
      return true;
  }
- 
+
 @@ -660,6 +660,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                      }
                  }
@@ -1558,17 +956,17 @@ index 641291b38..70f30e778 100644
      int fionda_opt_gap = 0;
      if (params.fionda_mode && !devices.empty() && n_gpu_layers > 0 && n_gpu_layers < n_layer) {
          ggml_backend_dev_t gpu_dev = devices[0];
--        
+-
 +
          // dynamically calculate average layer size and dimensions
          const size_t bench_size = pimpl->n_bytes / n_layer;
          const int bench_embd = hparams.n_embd;
--        
+-
 +
          ggml_backend_buffer_t buf_cpu = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(cpu_dev), bench_size);
          ggml_backend_buffer_t buf_gpu = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(gpu_dev), bench_size);
          ggml_backend_t backend_gpu = ggml_backend_dev_init(gpu_dev, nullptr);
--        
+-
 +
          if (buf_cpu && buf_gpu && backend_gpu) {
              struct ggml_init_params params_bench = {
@@ -1577,26 +975,26 @@ index 641291b38..70f30e778 100644
                  /* .no_alloc   = */ true,
              };
              struct ggml_context * ctx = ggml_init(params_bench);
--            
+-
 +
              // 1. measure PCIe H2D transfer
              struct ggml_tensor * t_cpu = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, bench_size);
              struct ggml_tensor * t_gpu = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, bench_size);
--            
+-
 +
              void * addr_cpu = ggml_backend_buffer_get_base(buf_cpu);
              void * addr_gpu = ggml_backend_buffer_get_base(buf_gpu);
--            
+-
 +
              ggml_backend_tensor_alloc(buf_cpu, t_cpu, addr_cpu);
              ggml_backend_tensor_alloc(buf_gpu, t_gpu, addr_gpu);
--            
+-
 +
              int64_t t0 = ggml_time_us();
              ggml_backend_tensor_copy(t_cpu, t_gpu);
              int64_t t1 = ggml_time_us();
              t_pcie_ms = (t1 - t0) / 1000.0f;
--            
+-
 +
              // 2. measure GPU compute dynamically
              struct ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, bench_embd, bench_embd);
@@ -1604,27 +1002,27 @@ index 641291b38..70f30e778 100644
              struct ggml_tensor * c = ggml_mul_mat(ctx, a, b);
              struct ggml_cgraph * gf = ggml_new_graph(ctx);
              ggml_build_forward_expand(gf, c);
--            
+-
 +
              size_t size_a = bench_embd * bench_embd * sizeof(float);
              size_t size_b = bench_embd * 512 * sizeof(float);
              size_t size_c = bench_embd * 512 * sizeof(float);
--            
+-
 +
              // ensure we don't overflow the bench_size
              if (size_a + size_b + size_c <= bench_size) {
                  void * addr_a = (char *)addr_gpu;
                  void * addr_b = (char *)addr_gpu + size_a;
                  void * addr_c = (char *)addr_gpu + size_a + size_b;
--                
+-
 +
                  ggml_backend_tensor_alloc(buf_gpu, a, addr_a);
                  ggml_backend_tensor_alloc(buf_gpu, b, addr_b);
                  ggml_backend_tensor_alloc(buf_gpu, c, addr_c);
--                
+-
 +
                  ggml_backend_graph_compute(backend_gpu, gf); // warmup
--                
+-
 +
                  t0 = ggml_time_us();
                  ggml_backend_graph_compute(backend_gpu, gf);
@@ -1633,23 +1031,23 @@ index 641291b38..70f30e778 100644
              } else {
                  LLAMA_LOG_WARN("%s: fionda: layer too small for benchmark matrices\n", __func__);
              }
--            
+-
 +
              ggml_free(ctx);
--            
+-
 +
              // 3. calculate optimal gap
              if (t_gpu_ms > 0) {
                  fionda_opt_gap = (int)std::ceil(t_pcie_ms / t_gpu_ms);
              }
--            
+-
 +
              LLAMA_LOG_INFO("%s: fionda: micro-benchmark complete. PCIe H2D = %.2f ms, GPU Compute = %.2f ms, Optimal Gap G = %d\n",
                             __func__, t_pcie_ms, t_gpu_ms, fionda_opt_gap);
          } else {
              LLAMA_LOG_WARN("%s: fionda: micro-benchmark failed to allocate buffers\n", __func__);
          }
--        
+-
 +
          if (backend_gpu) ggml_backend_synchronize(backend_gpu);
          if (backend_gpu) ggml_backend_free(backend_gpu);
@@ -1658,14 +1056,14 @@ index 641291b38..70f30e778 100644
      // in standard mode this is derived from i_gpu_start, in fionda mode it equals n_layer - clamped n_gpu
      const int fionda_n_gpu = fionda_interleave ? std::min(n_gpu_layers, n_layer) : 0;
      const int fionda_n_cpu = fionda_interleave ? (n_layer - fionda_n_gpu) : 0;
--    
+-
 +
      // evaluate hardware coefficient
      if (fionda_interleave && fionda_n_cpu > 0 && fionda_opt_gap > 0) {
          int natural_gap = fionda_n_gpu / fionda_n_cpu;
          LLAMA_LOG_INFO("%s: fionda: Hardware Coefficient Analysis -> Available Gap = %d, Required Gap = %d\n",
                         __func__, natural_gap, fionda_opt_gap);
--                       
+-
 +
          if (natural_gap < fionda_opt_gap) {
              LLAMA_LOG_WARN("=================================================================================\n");
@@ -1715,7 +1113,7 @@ index 641291b38..70f30e778 100644
              ggml_backend_cuda_fionda_event_create(&fv.slot_ready[1], cuda_device);
              ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[0], cuda_device);
              ggml_backend_cuda_fionda_event_create(&fv.slot_consumed[1], cuda_device);
--            
+-
 +
              for (int i = 0; i < 128; i++) {
                  ggml_backend_cuda_fionda_event_create_timing(&fv.profile_dma_start[i], cuda_device);
@@ -1734,7 +1132,7 @@ index 641291b38..70f30e778 100644
 @@ -9368,6 +9411,36 @@ uint32_t llama_model_n_cls_out(const struct llama_model * model) {
      return model->hparams.n_cls_out;
  }
- 
+
 +// lets the EAGLE1 draft reuse the target's final output layer instead of loading its own copy.
 +// this is safe and gives identical results: an EAGLE1 draft is built to work with the target's
 +// exact output layer, so the two are the same weights. reusing it saves a large chunk of GPU
@@ -1774,7 +1172,7 @@ index 641291b38..70f30e778 100644
          case LLM_ARCH_GLM_DSA:
 +        case LLM_ARCH_EAGLE:
              return LLAMA_ROPE_TYPE_NORM;
- 
+
          // the pairs of head values are offset by n_rot/2
 diff --git a/src/llama-model.h b/src/llama-model.h
 index 80cea573b..3f7f63dea 100644
@@ -1783,7 +1181,7 @@ index 80cea573b..3f7f63dea 100644
 @@ -523,6 +523,15 @@ struct llama_model {
      struct ggml_tensor * output_b        = nullptr;
      struct ggml_tensor * output_norm_enc = nullptr;
- 
+
 +    // EAGLE1 draft: projects concat(token_embd, target hidden state) -> n_embd
 +    struct ggml_tensor * fc   = nullptr;
 +    struct ggml_tensor * fc_b = nullptr;
@@ -1929,7 +1327,7 @@ index 8e6b9c238..29aa64108 100644
 @@ -202,6 +202,10 @@ struct llm_build_dream : public llm_graph_context {
      llm_build_dream(const llama_model & model, const llm_graph_params & params);
  };
- 
+
 +struct llm_build_eagle : public llm_graph_context {
 +    llm_build_eagle(const llama_model & model, const llm_graph_params & params);
 +};
@@ -1971,13 +1369,13 @@ index 2cfd6c01e..8007b6e2d 100644
  #include "llama.h"
 +#include "sampling.h"
 +#include "speculative.h"
- 
+
  #ifdef _WIN32
  #    define WIN32_LEAN_AND_MEAN
 @@ -32,6 +34,9 @@
  #    include <windows.h>
  #endif
- 
+
 +// size of the untimed seed prompt used to bootstrap speculative (draft model) tg tests
 +static const int BENCH_SPEC_N_SEED = 16;
 +
@@ -2065,13 +1463,13 @@ index 2cfd6c01e..8007b6e2d 100644
 +    std::string        model_draft;
 +    int                draft_max;
 +    float              draft_p_min;
- 
+
      llama_model_params to_llama_mparams() const {
          llama_model_params mparams = llama_model_default_params();
 @@ -1187,7 +1234,8 @@ struct cmd_params_instance {
      llama_context_params to_llama_cparams() const {
          llama_context_params cparams = llama_context_default_params();
- 
+
 -        cparams.n_ctx           = n_prompt + n_gen + n_depth;
 +        cparams.n_ctx           = n_prompt + n_gen + n_depth +
 +                                  (model_draft.empty() ? 0 : BENCH_SPEC_N_SEED + draft_max + 8);
@@ -2096,7 +1494,7 @@ index 2cfd6c01e..8007b6e2d 100644
              };
              instances.push_back(instance);
          }
- 
+
 +        // draft params only affect generation - don't multiply pp-only instances by them,
 +        // and don't sweep them at all when no draft model is set
 +        for (size_t i_dm = 0; i_dm < params.draft_max.size(); i_dm++)
@@ -2133,7 +1531,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +        }
      }
      // clang-format on
- 
+
 @@ -1377,17 +1446,24 @@ struct test {
      bool                     no_op_offload;
      bool                     no_host;
@@ -2146,7 +1544,7 @@ index 2cfd6c01e..8007b6e2d 100644
      int                      n_depth;
      std::string              test_time;
      std::vector<uint64_t>    samples_ns;
- 
+
 -    // fionda profiling (populated after test execution)
 +    // fionda profiling
      float                    fionda_avg_compute_ms = -1.0f;
@@ -2157,7 +1555,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +    std::vector<int>         samples_n_tokens;
 +    uint64_t                 n_drafted  = 0;
 +    uint64_t                 n_accepted = 0;
- 
+
      test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
          cpu_info(get_cpu_info()),
 @@ -1422,6 +1498,9 @@ struct test {
@@ -2172,7 +1570,7 @@ index 2cfd6c01e..8007b6e2d 100644
          n_depth        = inst.n_depth;
 @@ -1443,10 +1522,12 @@ struct test {
      uint64_t stdev_ns() const { return ::stdev(samples_ns); }
- 
+
      std::vector<double> get_ts() const {
 -        int                 n_tokens = n_prompt + n_gen;
          std::vector<double> ts;
@@ -2185,7 +1583,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +        }
          return ts;
      }
- 
+
 @@ -1484,7 +1565,8 @@ struct test {
              "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
              "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
@@ -2240,9 +1638,9 @@ index 2cfd6c01e..8007b6e2d 100644
 +        if (field == "accept%") {
 +            return 8;
 +        }
- 
+
          int width = std::max((int) field.length(), 10);
- 
+
 @@ -1820,6 +1917,12 @@ struct markdown_printer : public printer {
          if (field == "fionda_mode") {
              return "fionda";
@@ -2271,7 +1669,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +        }
          fields.emplace_back("test");
          fields.emplace_back("t/s");
- 
+
 @@ -1919,6 +2031,9 @@ struct markdown_printer : public printer {
              fields.emplace_back("dma_ms");
              fields.emplace_back("hide%");
@@ -2279,7 +1677,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +        if (has_draft) {
 +            fields.emplace_back("accept%");
 +        }
- 
+
          fprintf(fout, "|");
          for (const auto & field : fields) {
 @@ -1995,6 +2110,13 @@ struct markdown_printer : public printer {
@@ -2299,7 +1697,7 @@ index 2cfd6c01e..8007b6e2d 100644
 @@ -2112,6 +2234,95 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
      return true;
  }
- 
+
 +// speculative (draft model) token generation - real greedy generation instead of the random-token
 +// decode of test_gen, since draft acceptance is only meaningful on model-generated text.
 +// the seed prompt and common_speculative_begin() run before the timer starts; the timed section
@@ -2395,7 +1793,7 @@ index 2cfd6c01e..8007b6e2d 100644
 @@ -2198,6 +2409,10 @@ int main(int argc, char ** argv) {
      llama_model *               lmodel    = nullptr;
      const cmd_params_instance * prev_inst = nullptr;
- 
+
 +    // draft model for speculative decoding, cached by path like lmodel is cached by equal_mparams
 +    llama_model * lmodel_draft    = nullptr;
 +    std::string   prev_draft_path;
@@ -2424,7 +1822,7 @@ index 2cfd6c01e..8007b6e2d 100644
 @@ -2223,6 +2449,25 @@ int main(int argc, char ** argv) {
              prev_inst = &inst;
          }
- 
+
 +        if (inst.model_draft != prev_draft_path) {
 +            if (lmodel_draft) {
 +                llama_model_free(lmodel_draft);
@@ -2450,7 +1848,7 @@ index 2cfd6c01e..8007b6e2d 100644
 @@ -2230,8 +2475,35 @@ int main(int argc, char ** argv) {
              return 1;
          }
- 
+
 +        if (!inst.model_draft.empty()) {
 +            // EAGLE reads the target's hidden states, which requires embeddings output. this also
 +            // applies to pp-only tests so they report the faithful prompt cost of running with a
@@ -2459,7 +1857,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +        }
 +
          test t(inst, lmodel, ctx);
- 
+
 +        common_speculative *      spec = nullptr;
 +        common_params_speculative params_spec;
 +        if (!inst.model_draft.empty() && t.n_gen > 0) {
@@ -2481,7 +1879,7 @@ index 2cfd6c01e..8007b6e2d 100644
 +        }
 +
          llama_memory_clear(llama_get_memory(ctx), false);
- 
+
          // cool off before the test
 @@ -2279,7 +2551,16 @@ int main(int argc, char ** argv) {
                  if (params.progress) {
@@ -2504,7 +1902,7 @@ index 2cfd6c01e..8007b6e2d 100644
 @@ -2329,6 +2610,28 @@ int main(int argc, char ** argv) {
                  }
              }
- 
+
 +            if (spec && t.n_gen > 0) {
 +                // speculative generation times itself: the seed prompt and begin() are untimed
 +                // and must re-run each rep because the memory clear above wiped the target KV
@@ -2528,27 +1926,27 @@ index 2cfd6c01e..8007b6e2d 100644
 +            }
 +
              uint64_t t_start = get_time_ns();
- 
+
              if (t.n_prompt > 0) {
 @@ -2376,11 +2679,19 @@ int main(int argc, char ** argv) {
- 
+
          llama_perf_context_print(ctx);
- 
+
 +        if (spec) {
 +            // must precede llama_free(ctx): frees the draft context, which references lmodel_draft
 +            common_speculative_free(spec);
 +        }
 +
          llama_free(ctx);
- 
+
          ggml_threadpool_free_fn(threadpool);
      }
- 
+
 +    if (lmodel_draft) {
 +        llama_model_free(lmodel_draft);
 +    }
      llama_model_free(lmodel);
- 
+
      if (p) {
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
 index 5523f23b5..e7203f723 100644
@@ -2557,7 +1955,7 @@ index 5523f23b5..e7203f723 100644
 @@ -671,6 +671,9 @@ private:
              params_dft.cache_type_k = params_spec.cache_type_k;
              params_dft.cache_type_v = params_spec.cache_type_v;
- 
+
 +            // the draft model always lives fully in VRAM - never streamed by fionda
 +            params_dft.fionda_mode  = false;
 +
