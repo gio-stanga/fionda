@@ -56,7 +56,7 @@ cmake --build build --config Release -j 12
 
 Run inference with Fionda enabled:
 ```bash
-./build/bin/llama-cli -m path/to/model.gguf -ngl 20 --mmap 0 --fionda -p "Your prompt here"
+./build/bin/llama-cli -m path/to/model.gguf -ngl 20 --no-mmap --fionda -p "Your prompt here"
 ```
 
 If you wish to run benchmarks, check `benchmarking_guide.md`
