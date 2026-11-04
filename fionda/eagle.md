@@ -1,4 +1,4 @@
-# Fionda Speculative
+# FIONDA EAGLE-1 speculative decoding
 
 In this branch we implemented speculative decoding, a software technique use to speedup token generetion during dense LLM inference by predicting a sequence of tokens and attempting to execute them together for each layer, effectively increasing the batch size of the forward pass and increasing throughput (token/sec).
 
@@ -14,7 +14,7 @@ Speculative decoding will not only allow us to increase token generation speed, 
 
 We implemented one specific type of speculative decoding, **EAGLE1**. we chose this method because its draft model demands a really small amount of memory, it has a decent accuracy in predicting the tokens, and beacuse it was pre-trained on Hugging Face for one of the models we are testing, this was a dealbreaker since we do not have the compute to train one of these models on our own.
 
-A detailed explaination of EAGLE1 can be found in the [original paper](fionda/eagle1.pdf) which we precisely followed for our implementation.
+A detailed explaination of EAGLE1 can be found in the [original paper](https://arxiv.org/abs/2401.15077) which we precisely followed for our implementation.
 
 # Implementation details
 Our implementation is divided three parts:
@@ -25,7 +25,7 @@ Our implementation is divided three parts:
 we will explain each part in detail and point them in the actual code.
 
 ### Main Loop
-this is the entry point. It is in [`speculative-simple.cpp`](examples/speculative-simple/speculative-simple.cpp). Here the target model and draft mdoel are loaded. if the draft model is our eagle1 model then we will call `llama_set_embeddings(ctx_tgt, true)` (line 99) to make the target model output the hidden state the draft will need to do the speculation.
+this is the entry point. It is in [`speculative-simple.cpp`](../examples/speculative-simple/speculative-simple.cpp). Here the target model and draft mdoel are loaded. if the draft model is our eagle1 model then we will call `llama_set_embeddings(ctx_tgt, true)` (line 99) to make the target model output the hidden state the draft will need to do the speculation.
 
 Then at line 158 `common_speculative_begin(spec, prompt_tgt);` updates the KV Cache of the draft model after the initial prompt is processes by the target model.
 
@@ -36,16 +36,13 @@ Lastly, the target model's KV cache is updated to account only for the correctly
 ### Orchestration Layer
 The main loop specified above is generic to each and every type of speculative decoding, so now lets see in detail how EAGLE1 does that.
 
-The whole logic of the speculation is in [`speculative.cpp`](common/speculative.cpp), exactly at line 476 inside the body of `struct common_speculative_state_eagle1`. There we have defined the two main methods used during specuation:
+The whole logic of the speculation is in [`speculative.cpp`](../common/speculative.cpp), exactly at line 476 inside the body of `struct common_speculative_state_eagle1`. There we have defined the two main methods used during specuation:
 `begin()`, which will be called by the previously mentioned `common_speculative_begin(spec, prompt_tgt);`, feeds the prompt through the draft so its KV cache is aligned with the target before generation starts; and `draft()`, the core of the speculation. It reconciles which of last round's tokens the target accepted, re-feeds the confirmed tokens, then autoregressively generates new tokens, each time feeding the draft's own hidden state back as the next input, stopping when its confidence drops below a threshold.
 
 ### Draft Model
-Can be found in [src/models/eagle.cpp](src/models/eagle.cpp).
+Can be found in [src/models/eagle.cpp](../src/models/eagle.cpp).
 In this file we find the definition of the draft model, layer per layer.
 It concatenates the token embedding with the target's hidden state, passes it through a fusion layer and a single decoder layer, and projects to vocabulary via the shared LM-head.
 
 ### Full implementation details
-If you wish to see the full implementation diff of the speculative optimizations starting from the fionda scheduler, run the following comman
-```bash
-git diff fionda-scheduler..fionda-speculative -- . ':!.fionda_context' > .fionda_context/implementation.diff
-```
+The full implementation diff of the speculative work on top of the scheduler is at [compare/fionda-scheduler...fionda-speculative](https://github.com/gio-stanga/fionda/compare/fionda-scheduler...fionda-speculative).

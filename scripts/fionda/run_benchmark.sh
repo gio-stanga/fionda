@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# repo root, so the script works from any directory
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
 # modelli da testare, con offset EAGLE in formato "path:offset"
 # L'offset e' il numero di layer equivalenti al VRAM del draft
 MODELS=(
@@ -36,12 +39,12 @@ for entry in "${MODELS[@]}"; do
     echo "[SCENARIO A] TG dominante (Prompt 16, Gen 512)"
     echo "----------------------------------------------------------"
     echo ">> VANILLA:"
-    ../build/bin/llama-bench -m "$model" -ngl $NGL -p 16 -n 512 --mmap 0
+    "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL -p 16 -n 512 --mmap 0
     echo ">> FIONDA:"
-    ../build/bin/llama-bench -m "$model" -ngl $NGL_Fionda -p 16 -n 512 --mmap 0 --fionda
+    "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL_Fionda -p 16 -n 512 --mmap 0 --fionda
     echo ">> FIONDA+EAGLE:"
     if [ "$NGL_Eagle" -ge 1 ]; then
-        ../build/bin/llama-bench -m "$model" -ngl $NGL_Eagle -p 16 -n 512 --mmap 0 --fionda \
+        "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL_Eagle -p 16 -n 512 --mmap 0 --fionda \
             -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX
     else
         echo "(skip: NGL_Eagle=$NGL_Eagle < 1 — budget VRAM insufficiente per il confronto fair)"
@@ -52,12 +55,12 @@ for entry in "${MODELS[@]}"; do
     echo "[SCENARIO B] PP e TG bilanciati (Prompt 512, Gen 128)"
     echo "----------------------------------------------------------"
     echo ">> VANILLA:"
-    ../build/bin/llama-bench -m "$model" -ngl $NGL -p 512 -n 128 --mmap 0
+    "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL -p 512 -n 128 --mmap 0
     echo ">> FIONDA:"
-    ../build/bin/llama-bench -m "$model" -ngl $NGL_Fionda -p 512 -n 128 --mmap 0 --fionda
+    "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL_Fionda -p 512 -n 128 --mmap 0 --fionda
     echo ">> FIONDA+EAGLE:"
     if [ "$NGL_Eagle" -ge 1 ]; then
-        ../build/bin/llama-bench -m "$model" -ngl $NGL_Eagle -p 512 -n 128 --mmap 0 --fionda \
+        "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL_Eagle -p 512 -n 128 --mmap 0 --fionda \
             -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX
     else
         echo "(skip: NGL_Eagle=$NGL_Eagle < 1 — budget VRAM insufficiente per il confronto fair)"
@@ -68,12 +71,12 @@ for entry in "${MODELS[@]}"; do
     echo "[SCENARIO C] PP dominante (Prompt 2048, Gen 16)"
     echo "----------------------------------------------------------"
     echo ">> VANILLA:"
-    ../build/bin/llama-bench -m "$model" -ngl $NGL -p 2048 -n 16 --mmap 0
+    "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL -p 2048 -n 16 --mmap 0
     echo ">> FIONDA:"
-    ../build/bin/llama-bench -m "$model" -ngl $NGL_Fionda -p 2048 -n 16 --mmap 0 --fionda
+    "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL_Fionda -p 2048 -n 16 --mmap 0 --fionda
     echo ">> FIONDA+EAGLE:"
     if [ "$NGL_Eagle" -ge 1 ]; then
-        ../build/bin/llama-bench -m "$model" -ngl $NGL_Eagle -p 2048 -n 16 --mmap 0 --fionda \
+        "$ROOT/build/bin/llama-bench" -m "$model" -ngl $NGL_Eagle -p 2048 -n 16 --mmap 0 --fionda \
             -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX
     else
         echo "(skip: NGL_Eagle=$NGL_Eagle < 1 — budget VRAM insufficiente per il confronto fair)"

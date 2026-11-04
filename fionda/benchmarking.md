@@ -4,7 +4,31 @@
 
 The Fionda scheduler aims to speed up the prompt processing phase through dynamic scheduling of layers in VRAM. Furthermore, the Fionda implementation has been built entirely in CUDA and C++. We will therefore assume that the hardware on which it runs is equipped with an Nvidia graphics card with compute capabilities >= 3.7 and CUDA version >= 9.0
 
-Fionda also supports speculative decoding via **EAGLE1** (see [README](../README.md) for how it works). This guide covers benchmarks with and without speculation.
+Fionda also supports speculative decoding via **EAGLE1** (see [eagle.md](eagle.md) for how it works). This guide covers benchmarks with and without speculation.
+
+---
+
+## Test machine
+* **OS:** Ubuntu 24.04
+* **CPU:** AMD Ryzen 5 5600G
+* **Motherboard:** ASUS TUF B450 Gaming Plus V2
+* **RAM:** 4x8GB DDR4 2666MHz
+* **GPU:** NVIDIA GeForce RTX 3060 Ti (VRAM: 7834 MiB, Compute 8.6)
+* **PCIe:** 3.0 x16
+
+All published results were measured on this machine. Results are in [results/](results/).
+
+### mmap test with Llama 3.1 (ngl 12.5%, no speculative)
+
+1. Vanilla `--mmap 0` vs `--mmap 1` 
+    - pp goes from 900 t/s to 800 t/s
+    - tg remains constant at 9.54 t/s
+
+2. Fionda `--mmap 0` vs `--mmap 1` 
+    - pp goes from 1130 t/s to 850 t/s
+    - tg remains constant at 9.20 t/s
+
+=> better to set `--mmap 0` on both
 
 ---
 
@@ -12,7 +36,12 @@ Fionda also supports speculative decoding via **EAGLE1** (see [README](../README
 
 ### 1.1 Target models
 
-To download the models, visit https://huggingface.co/ and download [Meta Llama 3.1 8B](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF) in `.gguf` format. In our tests we used the `Q4_K_M` and `Q8_0` quantizations.
+To download the models, visit https://huggingface.co/ and download the following models in `.gguf` format:
+- [Meta Llama 3.1 8B](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
+- [Gemma 4 12B](https://huggingface.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF)
+- [Qwen 3.6 14B](https://huggingface.co/tvall43/Qwen3.6-14B-A3B-VibeForged-v2-GGUF)
+
+For each of these models, download the desired quantizations. In our tests we used the `Q4_K_M` and `Q8_0` quantizations.
 
 ### 1.2 Draft model (EAGLE1, only needed for speculation)
 
@@ -99,8 +128,9 @@ How to interpret the results
 
 ## 4. Automated benchmark execution
 
-To automatically run a battery of benchmarks we created the following bash scripts:
+To automatically run a battery of benchmarks we created the following bash scripts in [`scripts/fionda/`](../scripts/fionda/). They can be run from any directory, after building:
 - `run_benchmark.sh`  ->  tests different prompt sizes with the same number of fixed layers in VRAM
+- `run_ngl_sweep.sh`  ->  tests the same prompt while gradually increasing the number of fixed layers in VRAM, without speculation (`>> VANILLA:` and `>> FIONDA:` blocks)
 - `run_ngl_sweep_eagle.sh`  ->  tests the same prompt while gradually increasing the number of fixed layers in VRAM, producing three blocks per configuration: `>> VANILLA:` (no fionda), `>> FIONDA:` (`--fionda`), and `>> FIONDA+EAGLE:` (`--fionda -md <draft> --draft-max 4`)
 
 Before running these scripts, the model paths must be updated with those of your previously downloaded models. Furthermore, it is recommended to test one model at a time in order to customize the ngl values used for testing. In our case, the selected models have 32, 48 and 40 layers respectively, so we decided to create 3 custom value lists with a step of 1/8 of the total number of layers in the model.

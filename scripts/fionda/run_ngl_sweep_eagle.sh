@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# repo root, so the script works from any directory
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
 # modelli da testare, con offset EAGLE in formato "path:offset"
 # L'offset e' il numero di layer equivalenti al VRAM del draft
 MODELS=(
@@ -41,12 +44,12 @@ for entry in "${MODELS[@]}"; do
         echo "[NGL = $ngl]"
         echo "----------------------------------------------------------"
         echo ">> VANILLA:"
-        ../build/bin/llama-bench -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS --mmap 0
+        "$ROOT/build/bin/llama-bench" -m "$model" -ngl $ngl -p $PP_TOKENS -n $TG_TOKENS --mmap 0
         echo ">> FIONDA:"
-        ../build/bin/llama-bench -m "$model" -ngl $ngl_fionda -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda
+        "$ROOT/build/bin/llama-bench" -m "$model" -ngl $ngl_fionda -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda
         echo ">> FIONDA+EAGLE:"
         if [ "$ngl_eagle" -ge 1 ]; then
-            ../build/bin/llama-bench -m "$model" -ngl $ngl_eagle -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda \
+            "$ROOT/build/bin/llama-bench" -m "$model" -ngl $ngl_eagle -p $PP_TOKENS -n $TG_TOKENS --mmap 0 --fionda \
                 -md "$DRAFT_MODEL" --draft-max $DRAFT_MAX
         else
             echo "(skip: ngl_eagle=$ngl_eagle < 1 — budget VRAM insufficiente per il confronto fair)"
